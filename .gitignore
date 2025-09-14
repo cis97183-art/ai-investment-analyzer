@@ -1,2 +1,5 @@
 # 忽略 Python 虛擬環境
 venv/
+
+# 忽略 Streamlit 的 secrets 檔案
+.streamlit/secrets.toml
