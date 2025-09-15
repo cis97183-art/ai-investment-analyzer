@@ -7,6 +7,7 @@ from langchain.prompts import PromptTemplate
 import plotly.graph_objects as go
 import json
 from datetime import datetime
+import re # 新增 re 模組
 
 # --- 專案說明 ---
 # 這個應用程式是一個 AI 驅動的個人化投資組合建構與分析系統。
@@ -55,6 +56,37 @@ def get_llm_chain(prompt_template):
     chain = LLMChain(llm=model, prompt=prompt)
     return chain
 
+# --- 新增：更穩健的 JSON 解析函式 ---
+def _clean_and_parse_json(raw_text: str):
+    """
+    清理從 LLM 獲得的原始文字輸出並將其解析為 JSON。
+    此函式能處理常見的格式問題，例如 Markdown 程式碼區塊。
+    """
+    # 尋找被 ```json ... ``` 包圍的 JSON 內容
+    match = re.search(r"```(json)?\s*({.*?})\s*```", raw_text, re.DOTALL)
+    if match:
+        clean_text = match.group(2)
+    else:
+        # 如果沒有找到 Markdown 區塊，則假設整個文字是一個類似 JSON 的字串
+        # 並嘗試找到第一個 '{' 和最後一個 '}'
+        start_index = raw_text.find('{')
+        end_index = raw_text.rfind('}')
+        if start_index != -1 and end_index != -1 and end_index > start_index:
+            clean_text = raw_text[start_index:end_index+1]
+        else:
+            # 如果找不到清晰的 JSON 結構，則回退到原始文字
+            clean_text = raw_text
+
+    try:
+        return json.loads(clean_text)
+    except json.JSONDecodeError as e:
+        # 如果解析仍然失敗，則在 Streamlit 介面提供更詳細的除錯資訊
+        st.error("JSON 解析失敗，即使在清理後也是如此。")
+        st.write("以下是 AI 回傳的原始文字，這可能不是有效的 JSON：")
+        st.code(raw_text, language="text")
+        # 重新引發異常，讓主流程可以捕獲它
+        raise e
+
 # --- 報告生成與可視化 ---
 
 def generate_portfolio(risk_profile, investment_amount):
@@ -68,7 +100,7 @@ def generate_portfolio(risk_profile, investment_amount):
     2.  **建立投資組合**: 根據規則，挑選 5 到 8 支符合條件的台股（上市或上櫃公司），並為它們分配投資權重(權重總和必須為 100%)。
     3.  **計算與評估**: 估算你所建立的投資組合的整體 Beta 值、預期年化波動率、夏普比率及 HHI 指數。
     4.  **提供分析**: 撰寫一段簡潔的投資組合概述，說明此組合如何符合使用者的風險偏好。
-    5.  **格式化輸出**: 將所有結果以指定的 JSON 格式回傳。不要在 JSON 之外添加任何文字或說明。
+    5.  **格式化輸出**: 將所有結果以指定的 JSON 格式回傳。你的輸出必須是"純粹"的 JSON 物件，不包含任何 Markdown 標記 (例如 ```json) 或其他說明文字。直接以 '{' 開始，以 '}' 結束。
 
     ---
     {rules}
@@ -121,7 +153,7 @@ def generate_portfolio(risk_profile, investment_amount):
     }
     
     response = chain.invoke(input_data)
-    return json.loads(response['text'])
+    return _clean_and_parse_json(response['text'])
 
 
 def display_report(report_data, investment_amount):
@@ -274,7 +306,8 @@ if analyze_button:
             st.session_state.report_data = report
             st.session_state.portfolio_generated = True
         except json.JSONDecodeError:
-            st.error("AI 回傳格式錯誤，請稍後再試一次。這可能是暫時性問題。")
+            # 現在錯誤訊息主要由 _clean_and_parse_json 函式顯示，這裡可以顯示一個簡短的提示
+            st.error("AI 回應的格式無法被正確解析，請檢查上方由系統提供的詳細錯誤資訊。")
             st.session_state.portfolio_generated = False
         except Exception as e:
             st.error(f"分析過程中發生未預期的錯誤！")
@@ -310,3 +343,4 @@ if st.session_state.portfolio_generated:
 
 else:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
+
