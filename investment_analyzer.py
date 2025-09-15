@@ -121,7 +121,7 @@ def generate_portfolio(risk_profile, investment_amount):
         "beta": "<估算的整體 Beta 值，數字>",
         "annual_volatility": "<估算的預期年化波動率，字串，例如 '18%' 或 '> 20%'>",
         "sharpe_ratio": "<估算的夏普比率，數字>",
-        "hhi_index": "<計算出的 HHI 指數，數字>"
+        "hhi_index": "<計算出的 HHI 指數，一個具體的估算數字，例如 850>"
       }},
       "holdings": [
         {{
@@ -168,10 +168,19 @@ def display_report(report_data, investment_amount):
     st.subheader("📊 核心風險指標")
     metrics = report_data['portfolio_metrics']
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("整體 Beta 值", metrics['beta'])
-    col2.metric("預期年化波動率", metrics['annual_volatility'])
-    col3.metric("目標夏普比率", metrics['sharpe_ratio'])
-    col4.metric("持股集中度 (HHI)", f"{metrics['hhi_index']:.0f}")
+    col1.metric("整體 Beta 值", metrics.get('beta', 'N/A'))
+    col2.metric("預期年化波動率", metrics.get('annual_volatility', 'N/A'))
+    col3.metric("目標夏普比率", metrics.get('sharpe_ratio', 'N/A'))
+    
+    # --- 強化 HHI 指標的顯示容錯能力 ---
+    hhi_value = metrics.get('hhi_index', 'N/A')
+    try:
+        # 嘗試將其格式化為數字
+        formatted_hhi = f"{float(hhi_value):.0f}"
+    except (ValueError, TypeError):
+        # 如果失敗 (例如，值是 "> 800" 這樣的字串)，則直接顯示原始值
+        formatted_hhi = str(hhi_value)
+    col4.metric("持股集中度 (HHI)", formatted_hhi)
 
     st.write("---")
 
@@ -343,5 +352,6 @@ if st.session_state.portfolio_generated:
 
 else:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
+
 
 
