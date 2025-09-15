@@ -8,7 +8,8 @@ from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from urllib.parse import quote
-import plotly.graph_objects as go # 引入 Plotly
+import plotly.graph_objects as go
+from datetime import datetime # 引入 datetime 模組
 
 # --- 專案說明 ---
 # 這個應用程式是一個AI驅動的個人化投資建議分析報告系統。
@@ -72,9 +73,11 @@ def get_market_news(query):
 
 def get_llm_chain():
     """建立一個 LLMChain 來處理我們的請求。"""
+    # --- 優化點 3: 增加日期變數，修正 AI 幻覺問題 ---
     prompt_template = """
     你是一位專業的台股投資顧問。請根據以下提供的上下文資訊，以繁體中文回答問題。
     你的分析需要嚴謹、客觀，並且要明確地結合使用者的風險偏好。
+    請在報告開頭明確標示今天的日期為：「{current_date}」。
 
     上下文資訊:
     1. **公司基本資料與股價**: 
@@ -99,7 +102,7 @@ def get_llm_chain():
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.3)
     
     prompt = PromptTemplate(template=prompt_template, 
-                            input_variables=["context", "news", "ticker", "risk_profile", "question"])
+                            input_variables=["context", "news", "ticker", "risk_profile", "question", "current_date"]) # 新增 current_date
     chain = LLMChain(llm=model, prompt=prompt)
     return chain
 
@@ -124,12 +127,16 @@ def generate_report(ticker, risk_profile, info, hist, news):
 
     chain = get_llm_chain()
     
+    # 獲取今天的日期並格式化
+    today_str = datetime.now().strftime("%Y年%m月%d日")
+
     input_data = {
         'context': context_str,
         'news': news,
         'ticker': ticker,
         'risk_profile': risk_profile,
-        'question': question
+        'question': question,
+        'current_date': today_str # 將今天的日期傳遞給 AI
     }
     
     response = chain.invoke(input_data)
@@ -178,15 +185,15 @@ def generate_report(ticker, risk_profile, info, hist, news):
 # --- 建立使用者介面 (UI) ---
 
 st.set_page_config(page_title="AI 投資分析報告系統", layout="wide")
-st.title("💡 AI 個人化投資建議分析報告系統 (優化版)")
+st.title("💡 AI 個人化投資建議分析報告系統 (V3)")
 st.markdown("本系統使用 RAG 技術，結合即時股價與新聞數據，為您生成個人化的投資分析報告。")
 
 col1, col2 = st.columns([1, 2])
 
 with col1:
     st.header("請輸入您的需求")
-    ticker_input = st.text_input("請輸入台股代碼 (例如: 2330, 6446)", "2330")
-    risk_profile_input = st.selectbox("請選擇您的風險偏好", ('保守型', '穩健型', '積極型'))
+    ticker_input = st.text_input("請輸入台股代碼 (例如: 2330, 6446)", "3324")
+    risk_profile_input = st.selectbox("請選擇您的風險偏好", ('保守型', '穩健型', '積極型'), index=2)
     analyze_button = st.button("🚀 生成分析報告")
 
 with col2:
