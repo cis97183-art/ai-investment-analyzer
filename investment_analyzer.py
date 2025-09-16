@@ -11,7 +11,8 @@ import re
 
 # --- 導入新的模組 ---
 from etf_rules import ETF_PROMPT_FRAMEWORK
-from prompts import STOCK_PROMPT_FRAMEWORK, get_data_driven_prompt_templates
+# [BUG FIX] 修正導入的函式名稱，並移除不再需要單獨導入的 STOCK_PROMPT_FRAMEWORK
+from prompts import get_data_driven_prompt_templates
 from data_fetcher import get_stock_data
 from screener import screen_stocks
 
@@ -32,30 +33,43 @@ except (KeyError, Exception) as e:
 
 # --- RAG 核心邏輯 ---
 def get_llm_chain(prompt_template):
+    """
+    Initializes and returns a LangChain LLMChain.
+    Specifies the model to use Gemini-1.5-Flash for speed and cost-effectiveness,
+    and sets the response format to JSON.
+    """
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest",
                                  temperature=0.2,
+                                 # Enforce JSON output format
                                  model_kwargs={"response_format": {"type": "json_object"}})
     prompt = PromptTemplate.from_template(prompt_template)
     chain = LLMChain(llm=model, prompt=prompt)
     return chain
 
 def _clean_and_parse_json(raw_text: str):
+    """
+    Cleans and parses a JSON string from the LLM's raw output.
+    Handles cases where the JSON is wrapped in markdown code blocks.
+    """
+    # Use regex to find JSON within markdown code blocks (```json ... ```)
     match = re.search(r"```(json)?\s*({.*?})\s*```", raw_text, re.DOTALL)
     if match:
         clean_text = match.group(2)
     else:
+        # Fallback for cases where JSON is not in a markdown block
         start_index = raw_text.find('{')
         end_index = raw_text.rfind('}')
         if start_index != -1 and end_index != -1 and end_index > start_index:
             clean_text = raw_text[start_index:end_index+1]
         else:
-            clean_text = raw_text
+            clean_text = raw_text # Assume it's already a clean JSON
     try:
         return json.loads(clean_text)
     except json.JSONDecodeError as e:
         st.error("JSON 解析失敗，即使在清理後也是如此。")
         st.write("以下是 AI 回傳的原始文字，這可能不是有效的 JSON：")
         st.code(raw_text, language="text")
+        # Re-raise the exception to stop execution if parsing fails
         raise e
 
 
@@ -63,6 +77,7 @@ def _clean_and_parse_json(raw_text: str):
 def generate_portfolio(portfolio_type, risk_profile, investment_amount):
     """[V2] 根據即時數據篩選並生成投資報告"""
 
+    # For portfolios containing stocks, first get data and screen it
     if portfolio_type in ["純個股", "混合型"]:
         with st.spinner("步驟 1/2: 正在從 yfinance 獲取即時市場數據並進行量化篩選..."):
             all_stock_data = get_stock_data()
@@ -76,12 +91,19 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
                 st.warning(f"根據您的 '{risk_profile}' 規則，找不到同時滿足所有條件的股票。請嘗試放寬條件或更換風險偏好。")
                 return None
             
+            # Prepare the screened data as a CSV string for the LLM
             candidate_data_for_llm = candidate_df[['shortName', 'marketCap', 'beta', 'averageVolume', 'trailingPE', 'dividendYield']].to_csv(index=True)
 
         with st.spinner("步驟 2/2: 已完成量化篩選！正在將候選名單交由 AI 進行最終組合分析..."):
             prompt_templates = get_data_driven_prompt_templates()
             prompt_template = prompt_templates[portfolio_type]
             chain = get_llm_chain(prompt_template)
+            
+            # The 'stock_rules' are now implicitly part of the template, so we don't need to pass them here
+            # But the prompt template expects it, so we need to get it.
+            # A better approach would be to refactor prompts.py to not require this.
+            # For now, let's re-import it just for this call.
+            from prompts import STOCK_PROMPT_FRAMEWORK
             
             input_data = {
                 "stock_rules": STOCK_PROMPT_FRAMEWORK,
@@ -94,7 +116,7 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
             response = chain.invoke(input_data)
             return _clean_and_parse_json(response['text'])
 
-    else: # 純 ETF 流程
+    else: # ETF-only portfolio flow
         with st.spinner("正在為您建構純 ETF 投資組合..."):
             prompt_templates = get_data_driven_prompt_templates()
             prompt_template = prompt_templates[portfolio_type]
@@ -126,6 +148,7 @@ def display_report(report_data, investment_amount):
     cols = st.columns(len(metrics))
     for i, (key, value) in enumerate(metrics.items()):
         label = metric_labels.get(key, key.replace('_', ' ').title())
+        # Format HHI index as an integer
         if key == 'hhi_index':
             try:
                 value = f"{float(value):.0f}"
@@ -135,6 +158,7 @@ def display_report(report_data, investment_amount):
 
     st.write("---")
 
+    # Handle different portfolio structures (mixed vs. single-type)
     if 'core_holdings' in report_data:
         core_df = pd.DataFrame(report_data['core_holdings'])
         core_df['類型'] = '核心 (ETF)'
@@ -146,15 +170,15 @@ def display_report(report_data, investment_amount):
         df = pd.DataFrame(report_data['holdings'])
         st.subheader("視覺化分析")
 
-    # --- BUG FIX STARTS HERE ---
-    # 強制將 'weight' 欄位轉換為數字類型，以防 AI 回傳字串
+    # --- WEIGHT NORMALIZATION FIX ---
+    # Ensure 'weight' column is numeric, coercing errors to NaN
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
-    # 刪除轉換失敗的行 (如果有的話)
+    # Drop rows where weight conversion failed
     df.dropna(subset=['weight'], inplace=True)
-    # 重新標準化權重，確保總和為 1 (100%)
+    # Re-normalize weights to ensure they sum to 1 (100%)
     if not df.empty and df['weight'].sum() > 0:
         df['weight'] = df['weight'] / df['weight'].sum()
-    # --- BUG FIX ENDS HERE ---
+    # --- END FIX ---
 
     df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round(0)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
@@ -171,6 +195,7 @@ def display_report(report_data, investment_amount):
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with chart2:
+        # Determine the grouping column for the bar chart
         if 'industry' in df.columns and df['industry'].notna().any():
             group_col = 'industry'
             chart_title = '產業權重分佈'
@@ -195,10 +220,12 @@ def display_report(report_data, investment_amount):
     st.write("---")
     st.subheader("📝 詳細持股與資金計畫")
 
+    # Dynamically build the list of columns to display
     display_cols = ['ticker', 'name']
     if 'industry' in df.columns and df['industry'].notna().any(): display_cols.append('industry')
     if 'etf_type' in df.columns and df['etf_type'].notna().any(): display_cols.append('etf_type')
     display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
+    # Ensure we only try to display columns that actually exist in the DataFrame
     final_cols = [col for col in display_cols if col in df.columns]
 
     st.dataframe(df[final_cols], use_container_width=True, hide_index=True,
@@ -224,6 +251,7 @@ def handle_follow_up_question(question, context):
     return response['text']
 
 # --- UI ---
+# Initialize session state variables
 if 'portfolio_generated' not in st.session_state: st.session_state.portfolio_generated = False
 if 'report_data' not in st.session_state: st.session_state.report_data = None
 if 'messages' not in st.session_state: st.session_state.messages = []
@@ -237,28 +265,35 @@ with st.sidebar:
     st.info("免責聲明：本系統僅為AI輔助分析工具，所有資訊與建議僅供參考，不構成任何投資決策的依據。投資有風險，請謹慎評估。")
 
 if analyze_button:
+    # Clear previous chat history and report data on new generation
     st.session_state.messages = []
+    st.session_state.report_data = None
+    st.session_state.portfolio_generated = False
+    
     report = generate_portfolio(portfolio_type_input, risk_profile_input, investment_amount_input)
     if report:
         st.session_state.report_data = report
         st.session_state.portfolio_generated = True
-    else:
-        st.session_state.portfolio_generated = False 
 
 if st.session_state.portfolio_generated:
     display_report(st.session_state.report_data, investment_amount_input)
     st.write("---")
     st.subheader("💬 提問與互動調整")
     st.info("對這個投資組合有任何疑問嗎？或者想做些微調？請在下方提出您的問題。")
+    
+    # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]): st.markdown(message["content"])
+        
+    # Handle new chat input
     if prompt := st.chat_input("例如：為什麼選擇 0050？ 或者 可以把半導體個股換成別的嗎？"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
+        
         with st.spinner("AI 正在思考中..."):
             response = handle_follow_up_question(prompt, st.session_state.report_data)
             st.session_state.messages.append({"role": "assistant", "content": response})
             with st.chat_message("assistant"): st.markdown(response)
 else:
+    # Initial message when the app loads
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
-

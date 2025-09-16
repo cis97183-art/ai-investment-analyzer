@@ -19,19 +19,25 @@ STOCK_PROMPT_FRAMEWORK = """
 | **10. 投資組合再平衡 (Rebalancing)** | 每年一次或當單一資產權重偏離目標超過 +/- 3% 時進行。 | 每半年一次或當單一資產權重偏離目標超過 +/- 5% 時進行。 | 至少每年檢視一次，或當權重偏離超過 +/- 10% 時考慮獲利了結。 |
 """
 
-def get_prompt_templates():
+# [BUG FIX] 修正函式名稱，並強化 Prompt 內容，讓 AI 必須使用提供的數據
+def get_data_driven_prompt_templates():
     """返回一個包含所有投資組合提示語模板的字典。"""
     
     templates = {
         "純個股": """
         你是一位專業的台灣股市投資組合經理。請根據「台股投資組合風險偏好定義規則 V2 (實務強化版)」以及使用者資訊，為他量身打造一個純台股的投資組合。
-        **任務**: 挑選 5 到 8 支符合 '{risk_profile}' 規則的台股，分配權重，估算指標，並以指定的 JSON 格式回傳。
+        **任務**: 從下方提供的「候選股票清單」中，挑選 5 到 8 支最符合 '{risk_profile}' 規則的台股，分配權重，估算指標，並以指定的 JSON 格式回傳。
         **規則**: \n{stock_rules}
+        
+        **候選股票清單 (CSV格式)**:
+        這是經過量化篩選的高品質候選名單，你**必須**從中挑選股票來建立投資組合。
+        \n{candidate_stocks_csv}
+
         **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
         **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
         {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【純個股】投資組合", "overview": "這是一個根據您的積極型風險偏好設計的投資組合，專注於具備高成長潛力的電子股，旨在實現資本的最大化增長。", "generated_date": "{current_date}"}},
+          "summary": {{"title": "為{risk_profile}投資者設計的【純個股】投資組合", "overview": "這是一個根據您的積極型風險偏好，並從量化篩選後的優質名單中挑選出來的投資組合，專注於具備高成長潛力的電子股，旨在實現資本的最大化增長。", "generated_date": "{current_date}"}},
           "portfolio_metrics": {{
               "beta": "<一個數字，例如 1.2>", 
               "annual_volatility": "<一個百分比字串，例如 '21%'>", 
@@ -40,12 +46,7 @@ def get_prompt_templates():
           }},
           "holdings": [
             {{"ticker": "2330.TW", "name": "台積電", "industry": "半導體", "weight": 0.25, "rationale": "全球晶圓代工龍頭，技術領先，是 AI 趨勢下的核心受惠者。"}},
-            {{"ticker": "2454.TW", "name": "聯發科", "industry": "IC設計", "weight": 0.20, "rationale": "領先的智能手機晶片設計商，積極拓展 AI 與物聯網應用。"}},
-            {{"ticker": "2382.TW", "name": "廣達", "industry": "電腦及週邊設備", "weight": 0.15, "rationale": "AI 伺服器製造的關鍵供應商，受惠於雲端運算需求增長。"}},
-            {{"ticker": "3034.TW", "name": "聯詠", "industry": "IC設計", "weight": 0.15, "rationale": "驅動 IC 領域的領導者，產品應用廣泛，營運穩健。"}},
-            {{"ticker": "6669.TW", "name": "緯穎", "industry": "電腦及週邊設備", "weight": 0.10, "rationale": "專注於資料中心解決方案，直接受惠於大型雲端服務供應商的資本支出。"}},
-            {{"ticker": "3661.TW", "name": "世芯-KY", "industry": "IC設計", "weight": 0.10, "rationale": "高速運算 ASIC 設計領導者，為 AI 和 HPC 市場的關鍵參與者。"}},
-            {{"ticker": "2379.TW", "name": "瑞昱", "industry": "IC設計", "weight": 0.05, "rationale": "網路通訊與多媒體 IC 領導廠商，產品線多元，俗稱螃蟹股。"}}
+            {{"ticker": "2454.TW", "name": "聯發科", "industry": "IC設計", "weight": 0.20, "rationale": "領先的智能手機晶片設計商，積極拓展 AI 與物聯網應用。"}}
           ]
         }}
         """,
@@ -65,9 +66,7 @@ def get_prompt_templates():
           }},
           "holdings": [
             {{"ticker": "0050.TW", "name": "元大台灣50", "etf_type": "市值型", "weight": 0.4, "rationale": "追蹤台灣市值最大的50家公司，提供穩健的市場基本報酬，是資產配置的核心。"}},
-            {{"ticker": "00878.TW", "name": "國泰永續高股息", "etf_type": "高股息/ESG", "weight": 0.3, "rationale": "結合高股息與 ESG 篩選，提供穩定的現金流，同時降低波動性。"}},
-            {{"ticker": "00881.TW", "name": "國泰台灣5G+", "etf_type": "主題型", "weight": 0.3, "rationale": "專注於 5G 與未來通訊科技產業鏈，捕捉科技趨勢的成長潛力。"}},
-            {{"ticker": "006208.TW", "name": "富邦台50", "etf_type": "市值型", "weight": 0.0, "rationale": "與0050相似，但費用率稍低，可作為替代選擇。"}}
+            {{"ticker": "00878.TW", "name": "國泰永續高股息", "etf_type": "高股息/ESG", "weight": 0.3, "rationale": "結合高股息與 ESG 篩選，提供穩定的現金流，同時降低波動性。"}}
           ]
         }}
         """,
@@ -75,33 +74,34 @@ def get_prompt_templates():
         你是一位專業的台灣資產配置專家。請採用「核心-衛星」策略，為使用者建立一個混合型投資組合。
         **任務**:
         1. **核心部位**: 根據「台股 ETF 篩選規則 V3」，為 '{risk_profile}' 風險偏好挑選 1-2 支 ETF。
-        2. **衛星部位**: 根據「台股投資組合風險偏好定義規則 V2」，為 '{risk_profile}' 風險偏好挑選 3-5 支個股。
+        2. **衛星部位**: 從下方提供的「候選股票清單」中，為 '{risk_profile}' 風險偏好挑選 3-5 支個股。
         3. **格式化輸出**: 將結果以指定的 JSON 格式回傳，並根據風險偏好調整核心與衛星的資金比例。
+        
         **個股規則**: \n{stock_rules}
         **ETF 規則**: \n{etf_rules}
+
+        **候選股票清單 (CSV格式)**:
+        這是經過量化篩選的高品質候選名單，你的衛星部位**必須**從中挑選股票來建立。
+        \n{candidate_stocks_csv}
+
         **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
         **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
         **核心/衛星比例指引**: 保守型 (核心80%/衛星20%), 穩健型 (核心60%/衛星40%), 積極型 (核心40%/衛星60%)。
         {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【核心-衛星混合型】投資組合", "overview": "採用核心-衛星策略，以穩健的 ETF 為核心，搭配高成長潛力的個股作為衛星，旨在兼顧穩定性與資本增值潛力。", "generated_date": "{current_date}"}},
+          "summary": {{"title": "為{risk_profile}投資者設計的【核心-衛星混合型】投資組合", "overview": "採用核心-衛星策略，以穩健的 ETF 為核心，搭配從優質名單中篩選出的高成長潛力個股作為衛星，旨在兼顧穩定性與資本增值潛力。", "generated_date": "{current_date}"}},
           "portfolio_metrics": {{
               "beta": "<一個數字，例如 1.0>", 
               "annual_volatility": "<一個百分比字串，例如 '17%'>", 
               "sharpe_ratio": "<一個數字，例如 0.75>"
           }},
           "core_holdings": [
-            {{"ticker": "006208.TW", "name": "富邦台50", "weight": 0.6, "rationale": "作為投資組合的核心，追蹤台灣整體市場表現，提供基礎的穩定回報。"}},
-            {{"ticker": "00878.TW", "name": "國泰永續高股息", "weight": 0.0, "rationale": "提供穩定的股息現金流，並符合 ESG 趨勢，增加投資組合的防禦性。"}}
+            {{"ticker": "006208.TW", "name": "富邦台50", "weight": 0.6, "rationale": "作為投資組合的核心，追蹤台灣整體市場表現，提供基礎的穩定回報。"}}
           ],
           "satellite_holdings": [
-            {{"ticker": "2330.TW", "name": "台積電", "weight": 0.15, "rationale": "全球半導體領導者，為衛星部位中追求成長的基石。"}},
-            {{"ticker": "2454.TW", "name": "聯發科", "weight": 0.1, "rationale": "在智能手機晶片市場具備高市佔率，並積極佈局新興科技領域。"}},
-            {{"ticker": "2382.TW", "name": "廣達", "weight": 0.1, "rationale": "受惠於 AI 伺服器需求，為雲端產業鏈的關鍵供應商。"}},
-            {{"ticker": "6669.TW", "name": "緯穎", "weight": 0.05, "rationale": "專注於資料中心硬體，是雲端巨頭資本支出的直接受惠者。"}}
+            {{"ticker": "2330.TW", "name": "台積電", "weight": 0.15, "rationale": "全球半導體領導者，為衛星部位中追求成長的基石。"}}
           ]
         }}
         """
     }
     return templates
-
