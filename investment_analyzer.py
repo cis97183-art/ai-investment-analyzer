@@ -86,9 +86,15 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
         **規則**: \n{stock_rules}
         **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
+        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
         {{
           "summary": {{"title": "為{risk_profile}投資者設計的【純個股】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{"beta": "...", "annual_volatility": "...", "sharpe_ratio": "...", "hhi_index": "..."}},
+          "portfolio_metrics": {{
+              "beta": "<一個數字，例如 1.2>", 
+              "annual_volatility": "<一個百分比字串，例如 '21%'>", 
+              "sharpe_ratio": "<一個數字，例如 0.6>", 
+              "hhi_index": "<一個數字，例如 850>"
+          }},
           "holdings": [
             {{"ticker": "...", "name": "...", "industry": "...", "weight": 0.25, "rationale": "..."}}
           ]
@@ -100,9 +106,14 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
         **規則**: \n{etf_rules}
         **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
+        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
         {{
           "summary": {{"title": "為{risk_profile}投資者設計的【純 ETF】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{"beta": "...", "annual_volatility": "...", "sharpe_ratio": "..."}},
+          "portfolio_metrics": {{
+              "beta": "<一個數字，例如 0.9>", 
+              "annual_volatility": "<一個百分比字串，例如 '15%'>", 
+              "sharpe_ratio": "<一個數字，例如 0.8>"
+          }},
           "holdings": [
             {{"ticker": "...", "name": "...", "etf_type": "...", "weight": 0.4, "rationale": "..."}}
           ]
@@ -118,9 +129,14 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
         **ETF 規則**: \n{etf_rules}
         **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
+        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
         {{
           "summary": {{"title": "為{risk_profile}投資者設計的【核心-衛星混合型】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{"beta": "...", "annual_volatility": "...", "sharpe_ratio": "..."}},
+          "portfolio_metrics": {{
+              "beta": "<一個數字，例如 1.0>", 
+              "annual_volatility": "<一個百分比字串，例如 '17%'>", 
+              "sharpe_ratio": "<一個數字，例如 0.75>"
+          }},
           "core_holdings": [{{"ticker": "...", "name": "...", "weight": 0.7, "rationale": "..."}}],
           "satellite_holdings": [{{"ticker": "...", "name": "...", "weight": 0.1, "rationale": "..."}}]
         }}
@@ -362,4 +378,5 @@ if st.session_state.portfolio_generated:
                 st.markdown(response)
 else:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
+
 
