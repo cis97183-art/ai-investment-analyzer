@@ -10,6 +10,7 @@ from datetime import datetime
 import re
 
 # --- 從獨立檔案導入規則與 Prompt 框架 ---
+# [修正] 確保從 prompts.py 和 etf_rules.py 導入最新的變數
 from etf_rules import ETF_PROMPT_FRAMEWORK
 from prompts import STOCK_PROMPT_FRAMEWORK, get_prompt_templates
 
@@ -68,6 +69,7 @@ def _clean_and_parse_json(raw_text: str):
 def generate_portfolio(portfolio_type, risk_profile, investment_amount):
     """根據組合類型生成投資報告"""
     
+    # [修正] 從 prompts.py 檔案動態獲取模板，保持主程式乾淨
     prompt_templates = get_prompt_templates()
     prompt_template = prompt_templates[portfolio_type]
     chain = get_llm_chain(prompt_template)
@@ -75,7 +77,7 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
     
     input_data = {
         "stock_rules": STOCK_PROMPT_FRAMEWORK,
-        "etf_rules": ETF_PROMPT_FRAMEWORK, # 已修正變數名稱
+        "etf_rules": ETF_PROMPT_FRAMEWORK, 
         "risk_profile": risk_profile,
         "investment_amount": f"{investment_amount:,.0f}",
         "current_date": today_str
@@ -224,7 +226,7 @@ def handle_follow_up_question(question, context):
 # --- 建立使用者介面 (UI) ---
 
 st.set_page_config(page_title="AI 投資組合建構系統", layout="wide")
-st.title("💡 AI 個人化投資組合建構與分析系統 (V6)")
+st.title("💡 AI 個人化投資組合建構與分析系統")
 st.markdown("本系統採用專業風險框架，由 AI 為您量身打造專屬的**純個股、純 ETF** 或 **核心-衛星混合型** 台股投資組合。")
 
 if 'portfolio_generated' not in st.session_state:
@@ -298,3 +300,4 @@ if st.session_state.portfolio_generated:
                 st.markdown(response)
 else:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
+
