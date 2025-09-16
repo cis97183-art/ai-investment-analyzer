@@ -154,14 +154,24 @@ def display_report(report_data, investment_amount):
     
     st.subheader("📊 核心風險指標")
     metrics = report_data['portfolio_metrics']
+    
+    # ** 優化點 1: 使用簡潔的標籤並動態調整欄位 **
+    metric_labels = {
+        'beta': "Beta 值",
+        'annual_volatility': "年化波動率",
+        'sharpe_ratio': "夏普比率",
+        'hhi_index': "HHI 集中度"
+    }
+    
     cols = st.columns(len(metrics))
-    for col, (key, value) in zip(cols, metrics.items()):
+    for i, (key, value) in enumerate(metrics.items()):
+        label = metric_labels.get(key, key.replace('_', ' ').title())
         if key == 'hhi_index':
             try:
                 value = f"{float(value):.0f}"
             except (ValueError, TypeError):
                 value = str(value)
-        col.metric(key.replace('_', ' ').title(), value)
+        cols[i].metric(label, value)
 
     st.write("---")
 
@@ -180,38 +190,81 @@ def display_report(report_data, investment_amount):
     df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round(0)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
     
-    # 視覺化圖表
-    fig_pie = go.Figure(data=[go.Pie(
-        labels=df['name'], values=df['weight'], hole=.3,
-        textinfo='percent+label', hoverinfo='label+percent+value',
-        texttemplate='%{label}<br>%{percent:.1%}',
-    )])
-    fig_pie.update_layout(title_text='持股權重分配', showlegend=False)
-    st.plotly_chart(fig_pie, use_container_width=True)
+    # ** 優化點 2: 恢復長條圖並與圓餅圖並排 **
+    chart1, chart2 = st.columns(2)
+
+    with chart1:
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=df['name'], values=df['weight'], hole=.3,
+            textinfo='percent+label', hoverinfo='label+percent+value',
+            texttemplate='%{label}<br>%{percent:.1%}',
+        )])
+        fig_pie.update_layout(title_text='持股權重分配', showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with chart2:
+        # 智慧判斷要用哪個欄位來畫長條圖
+        if 'industry' in df.columns and df['industry'].notna().any():
+            group_col = 'industry'
+            chart_title = '產業權重分佈'
+        elif 'etf_type' in df.columns and df['etf_type'].notna().any():
+            group_col = 'etf_type'
+            chart_title = 'ETF 類型分佈'
+        else:
+            group_col = None
+
+        if group_col:
+            grouped = df.groupby(group_col)['weight'].sum().reset_index()
+            fig_bar = go.Figure(data=[go.Bar(
+                x=grouped[group_col],
+                y=grouped['weight'],
+                text=(grouped['weight']*100).apply(lambda x: f'{x:.1f}%'),
+                textposition='auto',
+            )])
+            fig_bar.update_layout(
+                title_text=chart_title,
+                xaxis_title=None,
+                yaxis_title="權重",
+                yaxis_tickformat='.0%',
+                margin=dict(l=0, r=0, t=40, b=0)
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("此投資組合無適用的分類可供繪製長條圖。")
+
 
     st.write("---")
     
     # 詳細持股表格
-    if 'core_holdings' in report_data:
-        st.subheader("📝 核心資產 (Core Assets - ETFs)")
-        st.dataframe(core_df, use_container_width=True, hide_index=True)
-        st.subheader("📝 衛星資產 (Satellite Assets - Stocks)")
-        st.dataframe(sat_df, use_container_width=True, hide_index=True)
-    else:
-        st.subheader("📝 詳細持股與資金計畫")
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "權重 (%)": st.column_config.ProgressColumn(
-                    "權重 (%)", format="%.2f%%", min_value=0, max_value=100,
-                ),
-                "資金分配 (TWD)": st.column_config.NumberColumn(
-                    "資金分配 (TWD)", format="NT$ %'d"
-                )
-            }
-        )
+    st.subheader("📝 詳細持股與資金計畫")
+
+    # ** 優化點 3: 統一表格顯示，只顯示一個權重欄位 **
+    display_cols = ['ticker', 'name']
+    # 智慧判斷要顯示 industry 還是 etf_type
+    if 'industry' in df.columns and df['industry'].notna().any():
+        display_cols.append('industry')
+    if 'etf_type' in df.columns and df['etf_type'].notna().any():
+        display_cols.append('etf_type')
+        
+    display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
+    
+    # 確保所有要顯示的欄位都存在
+    final_cols = [col for col in display_cols if col in df.columns]
+
+    st.dataframe(
+        df[final_cols],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "權重 (%)": st.column_config.ProgressColumn(
+                "權重 (%)", format="%.2f%%", min_value=0, max_value=100,
+            ),
+            "資金分配 (TWD)": st.column_config.NumberColumn(
+                "資金分配 (TWD)", format="NT$ %'d"
+            ),
+            "rationale": st.column_config.TextColumn("簡要理由", width="large")
+        }
+    )
 
 def handle_follow_up_question(question, context):
     """處理後續問題"""
@@ -238,7 +291,6 @@ st.set_page_config(page_title="AI 投資組合建構系統", layout="wide")
 st.title("💡 AI 個人化投資組合建構與分析系統 (V5)")
 st.markdown("本系統採用專業風險框架，由 AI 為您量身打造專屬的**純個股、純 ETF** 或 **核心-衛星混合型** 台股投資組合。")
 
-# 初始化 session state
 if 'portfolio_generated' not in st.session_state:
     st.session_state.portfolio_generated = False
 if 'report_data' not in st.session_state:
