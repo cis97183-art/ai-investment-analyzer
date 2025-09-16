@@ -1,8 +1,9 @@
-# --- 台股 ETF 篩選規則 V2 (AI Prompt Framework for Taiwan ETFs) ---
-# 本框架根據專家建議，整合了更全面的績效與風險量化指標，旨在讓 AI 的篩選能力更加專業。
+# --- 台股 ETF 篩選規則 (AI Prompt Framework for Taiwan ETFs) ---
+# 本框架根據專家建議，整合了全面的績效與風險量化指標，旨在讓 AI 的篩選能力更加專業。
+# 已將 V2 整合並簡化變數名稱為 ETF_PROMPT_FRAMEWORK
 
-ETF_PROMPT_FRAMEWORK_V2 = """
-### 台股 ETF 篩選規則 V2 (專業增強版)
+ETF_PROMPT_FRAMEWORK = """
+### 台股 ETF 篩選規則 (專業增強版)
 
 | 規則維度 (Rule Dimension) | 保守型 (Conservative) | 穩健型 (Balanced) | 積極型 (Aggressive) | 規則說明 (Rule Description) |
 |---|---|---|---|---|
@@ -23,4 +24,3 @@ ETF_PROMPT_FRAMEWORK_V2 = """
 - **穩健型**: 核心部位 (60%) 使用穩健型 ETF 規則；衛星部位 (40%) 使用積極型個股規則。
 - **積極型**: 核心部位 (40%) 使用積極型 ETF 規則；衛星部位 (60%) 使用積極型個股規則。
 """
-

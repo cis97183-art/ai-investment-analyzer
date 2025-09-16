@@ -9,8 +9,9 @@ import json
 from datetime import datetime
 import re
 
-# --- 從獨立檔案導入 ETF 規則 ---
+# --- 從獨立檔案導入規則與 Prompt 框架 ---
 from etf_rules import ETF_PROMPT_FRAMEWORK
+from prompts import STOCK_PROMPT_FRAMEWORK, get_prompt_templates
 
 # --- 專案說明 ---
 # 這個應用程式是一個 AI 驅動的個人化投資組合建構與分析系統。
@@ -20,33 +21,18 @@ from etf_rules import ETF_PROMPT_FRAMEWORK
 
 # --- Google API 金鑰設定 ---
 try:
+    # 這是從 Streamlit Secrets 讀取金鑰的安全作法
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 except (KeyError, Exception) as e:
     st.error("錯誤：請確認你的 Google API 金鑰已在 `.streamlit/secrets.toml` 中正確設定。")
     st.info("設定教學：在專案資料夾中建立 `.streamlit` 資料夾，並在其中新增 `secrets.toml` 檔案，內容為：`GOOGLE_API_KEY = \"你的金鑰\"`")
     st.stop()
 
-# --- AI Prompt 框架 (個股規則) ---
-STOCK_PROMPT_FRAMEWORK = """
-### 台股投資組合風險偏好定義規則 (AI Prompt Framework for Taiwan Market)
-| 規則維度 (Rule Dimension) | 保守型 (Conservative) | 穩健型 (Balanced) | 積極型 (Aggressive) |
-|---|---|---|---|
-| **1. 主要投資目標** | 資本保值，追求穩定股利現金流與絕對報酬。 | 追求資本長期溫和增值，兼顧風險控制。 | 追求資本最大化增長，願意承受較大波動以換取高額回報。 |
-| **2. 投資組合 Beta 值** | 0.5 - 0.8 | 0.8 - 1.1 | > 1.1 |
-| **3. 預期年化波動率** | 8% - 13% | 13% - 20% | > 20% |
-| **4. 目標夏普比率**| > 1.0 | > 0.7 | > 0.5 |
-| **5. a) HHI 指數** | < 500 | 500 - 800 | > 800 |
-| **5. b) 單一產業權重** | < 20% | < 30% | < 40% |
-| **6. a) 公司規模** | 大型股為主 (市值 > 2000億) | 大型、中型股為主 (市值 > 500億) | 可包含中小型股 |
-| **6. b) 產業風格** | 側重防禦型產業 (金融、電信、必需消費) | 均衡配置核心電子股與傳產龍頭股。 | 側重高成長電子股 (半導體、AI、IC設計) |
-| **6. c) 財務品質** | 高殖利率、低負債、穩定現金流。 | 兼具穩定盈利與營收成長潛力。 | 高營收增長、高毛利。 |
-| **7. 市場板塊** | 以**集中市場(上市)**為主。 | 可適度納入**櫃買中心(上櫃)**績優股。 | 可提高櫃買中心(上櫃)比重。 |
-"""
-
 # --- RAG 核心邏輯 ---
 
 def get_llm_chain(prompt_template):
     """建立一個 LLMChain 來處理我們的請求。"""
+    # 設定模型，並指定回傳格式為 JSON
     model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest",
                                  temperature=0.2,
                                  model_kwargs={"response_format": {"type": "json_object"}})
@@ -56,15 +42,18 @@ def get_llm_chain(prompt_template):
 
 def _clean_and_parse_json(raw_text: str):
     """清理並解析 LLM 的 JSON 輸出，增強穩定性。"""
+    # 優先使用正規表達式尋找被 ```json ... ``` 包裹的區塊
     match = re.search(r"```(json)?\s*({.*?})\s*```", raw_text, re.DOTALL)
     if match:
         clean_text = match.group(2)
     else:
+        # 如果找不到，則退回使用大括號尋找 JSON 物件
         start_index = raw_text.find('{')
         end_index = raw_text.rfind('}')
         if start_index != -1 and end_index != -1 and end_index > start_index:
             clean_text = raw_text[start_index:end_index+1]
         else:
+            # 如果連大括號都找不到，就直接使用原始文字
             clean_text = raw_text
     try:
         return json.loads(clean_text)
@@ -79,77 +68,14 @@ def _clean_and_parse_json(raw_text: str):
 def generate_portfolio(portfolio_type, risk_profile, investment_amount):
     """根據組合類型生成投資報告"""
     
-    prompt_templates = {
-        "純個股": """
-        你是一位專業的台灣股市投資組合經理。請根據「台股投資組合風險偏好定義規則」以及使用者資訊，為他量身打造一個純台股的投資組合。
-        **任務**: 挑選 5 到 8 支符合 '{risk_profile}' 規則的台股，分配權重，估算指標，並以指定的 JSON 格式回傳。
-        **規則**: \n{stock_rules}
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
-        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
-        {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【純個股】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個數字，例如 1.2>", 
-              "annual_volatility": "<一個百分比字串，例如 '21%'>", 
-              "sharpe_ratio": "<一個數字，例如 0.6>", 
-              "hhi_index": "<一個數字，例如 850>"
-          }},
-          "holdings": [
-            {{"ticker": "...", "name": "...", "industry": "...", "weight": 0.25, "rationale": "..."}}
-          ]
-        }}
-        """,
-        "純 ETF": """
-        你是一位專業的台灣 ETF 投資組合經理。請根據「台股 ETF 篩選規則」以及使用者資訊，為他量身打造一個純台股 ETF 的投資組合。
-        **任務**: 挑選 3 到 5 支符合 '{risk_profile}' 規則的台股 ETF，分配權重，估算指標，並以指定的 JSON 格式回傳。
-        **規則**: \n{etf_rules}
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
-        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
-        {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【純 ETF】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個數字，例如 0.9>", 
-              "annual_volatility": "<一個百分比字串，例如 '15%'>", 
-              "sharpe_ratio": "<一個數字，例如 0.8>"
-          }},
-          "holdings": [
-            {{"ticker": "...", "name": "...", "etf_type": "...", "weight": 0.4, "rationale": "..."}}
-          ]
-        }}
-        """,
-        "混合型": """
-        你是一位專業的台灣資產配置專家。請採用「核心-衛星」策略，為使用者建立一個混合型投資組合。
-        **任務**:
-        1. **核心部位 (70% 資金)**: 根據「台股 ETF 篩選規則」，為 '{risk_profile}' 風險偏好挑選 1-2 支 ETF。
-        2. **衛星部位 (30% 資金)**: 根據「台股投資組合風險偏好定義規則」，為 '{risk_profile}' 風險偏好挑選 3-5 支個股。
-        3. **格式化輸出**: 將結果以指定的 JSON 格式回傳。
-        **個股規則**: \n{stock_rules}
-        **ETF 規則**: \n{etf_rules}
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
-        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        **重要**: `portfolio_metrics` 中的所有值都必須是純粹的數字或指定的百分比字串，不得包含任何括號或額外說明文字。
-        {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【核心-衛星混合型】投資組合", "overview": "...", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個數字，例如 1.0>", 
-              "annual_volatility": "<一個百分比字串，例如 '17%'>", 
-              "sharpe_ratio": "<一個數字，例如 0.75>"
-          }},
-          "core_holdings": [{{"ticker": "...", "name": "...", "weight": 0.7, "rationale": "..."}}],
-          "satellite_holdings": [{{"ticker": "...", "name": "...", "weight": 0.1, "rationale": "..."}}]
-        }}
-        """
-    }
-
+    prompt_templates = get_prompt_templates()
     prompt_template = prompt_templates[portfolio_type]
     chain = get_llm_chain(prompt_template)
     today_str = datetime.now().strftime("%Y年%m月%d日")
     
     input_data = {
         "stock_rules": STOCK_PROMPT_FRAMEWORK,
-        "etf_rules": ETF_PROMPT_FRAMEWORK,
+        "etf_rules": ETF_PROMPT_FRAMEWORK, # 已修正變數名稱
         "risk_profile": risk_profile,
         "investment_amount": f"{investment_amount:,.0f}",
         "current_date": today_str
@@ -171,7 +97,6 @@ def display_report(report_data, investment_amount):
     st.subheader("📊 核心風險指標")
     metrics = report_data['portfolio_metrics']
     
-    # ** 優化點 1: 使用簡潔的標籤並動態調整欄位 **
     metric_labels = {
         'beta': "Beta 值",
         'annual_volatility': "年化波動率",
@@ -182,6 +107,7 @@ def display_report(report_data, investment_amount):
     cols = st.columns(len(metrics))
     for i, (key, value) in enumerate(metrics.items()):
         label = metric_labels.get(key, key.replace('_', ' ').title())
+        # 確保 HHI 指數顯示為整數
         if key == 'hhi_index':
             try:
                 value = f"{float(value):.0f}"
@@ -206,7 +132,6 @@ def display_report(report_data, investment_amount):
     df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round(0)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
     
-    # ** 優化點 2: 恢復長條圖並與圓餅圖並排 **
     chart1, chart2 = st.columns(2)
 
     with chart1:
@@ -248,15 +173,11 @@ def display_report(report_data, investment_amount):
         else:
             st.info("此投資組合無適用的分類可供繪製長條圖。")
 
-
     st.write("---")
     
-    # 詳細持股表格
     st.subheader("📝 詳細持股與資金計畫")
 
-    # ** 優化點 3: 統一表格顯示，只顯示一個權重欄位 **
     display_cols = ['ticker', 'name']
-    # 智慧判斷要顯示 industry 還是 etf_type
     if 'industry' in df.columns and df['industry'].notna().any():
         display_cols.append('industry')
     if 'etf_type' in df.columns and df['etf_type'].notna().any():
@@ -264,7 +185,6 @@ def display_report(report_data, investment_amount):
         
     display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
     
-    # 確保所有要顯示的欄位都存在
     final_cols = [col for col in display_cols if col in df.columns]
 
     st.dataframe(
@@ -304,7 +224,7 @@ def handle_follow_up_question(question, context):
 # --- 建立使用者介面 (UI) ---
 
 st.set_page_config(page_title="AI 投資組合建構系統", layout="wide")
-st.title("💡 AI 個人化投資組合建構與分析系統 (V5)")
+st.title("💡 AI 個人化投資組合建構與分析系統 (V6)")
 st.markdown("本系統採用專業風險框架，由 AI 為您量身打造專屬的**純個股、純 ETF** 或 **核心-衛星混合型** 台股投資組合。")
 
 if 'portfolio_generated' not in st.session_state:
@@ -378,5 +298,3 @@ if st.session_state.portfolio_generated:
                 st.markdown(response)
 else:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始。")
-
-
