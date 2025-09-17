@@ -49,9 +49,10 @@ def get_stock_metrics(stock_ids, date_str):
         for i in range(0, len(stock_ids), batch_size):
             batch = stock_ids[i:i + batch_size]
             print(f"正在獲取第 {i+1} 到 {i+len(batch)} 支股票的數據...")
+            # [修正] 根據 FinMind API 的最新版本，將參數 'date' 修改為 'start_date'
             df_batch = API.taiwan_stock_per_pbr(
                 stock_id=batch,
-                date=date_str
+                start_date=date_str
             )
             if not df_batch.empty:
                 all_metrics.append(df_batch)
@@ -113,4 +114,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
