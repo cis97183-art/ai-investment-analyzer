@@ -1,136 +1,196 @@
-import pandas as pd
 import sqlite3
+import pandas as pd
 from datetime import datetime, timedelta
-from FinMind.data import DataLoader
+import requests
+import time
+import os
+
+# --- 專案模組 ---
 from config import FINMIND_API_TOKEN
+from news_fetcher import update_news_sentiment_for_stocks
 
 # --- 全域設定 ---
 DB_PATH = "tw_stock_data.db"
-TABLE_NAME = "daily_metrics"
-API = DataLoader()
+# 為了演示，我們選取台灣50指數 + 部分中小型潛力股作為基礎股票池
+# 在真實應用中，這個列表可以擴展到台股全市場
+TICKER_LIST = [
+    "2330", "2317", "2454", "2412", "2881", "2882", "2886", "1301", "1303", "1326",
+    "2002", "2207", "2303", "2308", "2382", "2891", "2912", "3008", "3045", "3711",
+    "4904", "5871", "5880", "6505", "9910", "2379", "2395", "2884", "1216", "1101",
+    "2357", "2603", "2609", "2615", "2880", "2883", "2885", "2892", "4938", "6415",
+    "1590", "3661", "8069", "6669", "3529", "3034", "3443", "2458", "5269", "2377"
+]
 
-def login_finmind():
-    """登入 FinMind API"""
-    if not FINMIND_API_TOKEN or FINMIND_API_TOKEN == "在此貼上您從 FinMind 網站獲取的 API Token":
-        print("錯誤：請在 config.py 中設定您的 FINMIND_API_TOKEN。")
-        return False
-    API.login_by_token(api_token=FINMIND_API_TOKEN)
-    print("FinMind API 登入成功。")
-    return True
 
-def get_all_stock_ids():
-    """獲取所有上市上櫃的普通股股票代碼列表"""
-    print("正在從 FinMind 獲取所有台股基本資訊...")
-    stock_list = API.taiwan_stock_info()
+def setup_database():
+    """
+    [Phase 1] 建立資料庫與所需的表格 (daily_metrics, news_sentiment)。
+    """
+    print("正在設定資料庫結構...")
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        # 1. 建立每日財務指標表
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_metrics (
+            stock_id TEXT NOT NULL,
+            date DATE NOT NULL,
+            stock_name TEXT,
+            industry_category TEXT,
+            pe_ratio REAL,
+            pb_ratio REAL,
+            yield REAL,
+            close_price REAL,
+            PRIMARY KEY (stock_id, date)
+        )
+        """)
+        # 2. 建立新聞情緒表 (來自藍圖)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS news_sentiment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stock_id TEXT NOT NULL,
+            news_date DATE NOT NULL,
+            headline TEXT NOT NULL,
+            source TEXT,
+            sentiment_score REAL,
+            sentiment_category TEXT,
+            UNIQUE(stock_id, headline)
+        )
+        """)
+        conn.commit()
+    print("資料庫設定完成。")
+
+def fetch_finmind_data(stock_ids: list, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    [Phase 1] 從 FinMind API 獲取指定股票列表的每日指標。
+    """
+    base_url = "https://api.finmindtrade.com/api/v4/data"
+    all_data = []
     
-    if stock_list.empty:
-        print("錯誤：從 API 獲取的股票列表為空。")
-        return []
-
-    print(f"已獲取 {len(stock_list)} 筆市場標的總數。開始篩選普通股...")
+    print(f"正在從 FinMind 下載 {len(stock_ids)} 支股票的數據...")
     
-    # [修正] 更新篩選邏輯，以 'industry_category' 是否存在作為主要判斷依據
-    # 這樣可以更可靠地過濾掉指數、ETF、DR 等非普通股標的
-    filtered_stocks = stock_list[
-        stock_list['industry_category'].notna() &
-        (stock_list['industry_category'] != "") &
-        (~stock_list['stock_name'].str.contains('DR|ES|CA|ETF'))
-    ].copy() # 使用 .copy() 避免 SettingWithCopyWarning
-    
-    return filtered_stocks['stock_id'].tolist()
-
-def get_stock_metrics(stock_ids, date_str):
-    """批次獲取多支股票的 PER, PBR, Yield 等指標"""
-    try:
-        # FinMind API 限制單次查詢的股票數量，這裡進行分批處理
-        batch_size = 100
-        all_metrics = []
-        
-        for i in range(0, len(stock_ids), batch_size):
-            batch = stock_ids[i:i + batch_size]
-            print(f"正在獲取第 {i+1} 到 {i+len(batch)} 支股票的數據...")
-            # [修正] 根據 FinMind API 的最新版本，將參數 'date' 修改為 'start_date'
-            df_batch = API.taiwan_stock_per_pbr(
-                stock_id=batch,
-                start_date=date_str
-            )
-            if not df_batch.empty:
-                all_metrics.append(df_batch)
-        
-        if not all_metrics:
-            return pd.DataFrame()
-            
-        return pd.concat(all_metrics, ignore_index=True)
-        
-    except Exception as e:
-        print(f"獲取 PER/PBR 時發生錯誤: {e}")
-        return pd.DataFrame()
-
-def save_to_db(df, db_path, table_name):
-    """將 DataFrame 存入 SQLite 資料庫"""
-    if df.empty:
-        print("沒有數據可儲存。")
-        return
-    
-    with sqlite3.connect(db_path) as conn:
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
-        print(f"成功將 {len(df)} 筆資料寫入資料庫 '{db_path}' 的 '{table_name}' 表中。")
-
-def main():
-    """主執行流程"""
-    if not login_finmind():
-        return
-    
-    target_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    print(f"目標資料日期: {target_date}")
-
-    # 1. 獲取所有股票代碼
-    print("步驟 1/3: 正在獲取所有股票代碼...")
-    stock_ids = get_all_stock_ids()
-    
-    if not stock_ids:
-        print("未能獲取到任何有效的股票代碼，程序終止。請檢查 get_all_stock_ids 函式的篩選邏輯或 API 連線。")
-        return
-
-    print(f"篩選後，獲取到 {len(stock_ids)} 支上市上櫃普通股代碼。")
-
-    # 2. 批次獲取所有股票的關鍵指標
-    print(f"步驟 2/3: 正在為 {len(stock_ids)} 支股票獲取 {target_date} 的指標數據...")
-    all_metrics_df = get_stock_metrics(stock_ids, target_date)
-    
-    # 3. 數據清洗與整理
-    if not all_metrics_df.empty:
-        print("步驟 3/3: 正在進行數據清洗與整理...")
-
-        # [修正] 增加欄位名稱的穩健性處理，以應對 API 可能的大小寫變動
-        rename_map = {
-            'dividend_yield': 'yield',
-            'PE': 'pe_ratio',      # 原始預期大寫
-            'pe': 'pe_ratio',      # 備用小寫
-            'PB': 'pb_ratio',      # 原始預期大寫
-            'pb': 'pb_ratio'       # 備用小寫
+    for i, stock_id in enumerate(stock_ids):
+        params = {
+            "dataset": "TaiwanStockPriceAndPER",
+            "data_id": stock_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "token": FINMIND_API_TOKEN,
         }
         
-        # 篩選出 DataFrame 中實際存在的欄位進行重新命名
-        existing_rename_map = {k: v for k, v in rename_map.items() if k in all_metrics_df.columns}
-        all_metrics_df.rename(columns=existing_rename_map, inplace=True)
+        try:
+            res = requests.get(base_url, params=params)
+            res.raise_for_status()
+            data = res.json()
 
-        # 確保必要的欄位存在，若不存在則給予預設值 (e.g., NA)
-        required_cols = ['pe_ratio', 'pb_ratio', 'yield']
-        for col in required_cols:
-            if col not in all_metrics_df.columns:
-                all_metrics_df[col] = pd.NA
-                print(f"警告：資料來源缺少 '{col}' 欄位，已自動補上 NA 值。")
+            if data['msg'] == 'success':
+                df = pd.DataFrame(data['data'])
+                # 欄位重新命名以符合我們的資料庫結構
+                df.rename(columns={
+                    'stock_id': 'stock_id',
+                    'date': 'date',
+                    'PBR': 'pb_ratio',
+                    'PER': 'pe_ratio',
+                    'yield': 'yield',
+                    'close': 'close_price'
+                }, inplace=True)
+                # 確保欄位齊全
+                df = df[['stock_id', 'date', 'pb_ratio', 'pe_ratio', 'yield', 'close_price']]
+                all_data.append(df)
+            else:
+                 print(f"警告: FinMind API 回傳 '{data['msg']}' (股票代碼: {stock_id})")
+        
+        except requests.exceptions.RequestException as e:
+            print(f"錯誤: 請求 FinMind API 失敗 (股票代碼: {stock_id}): {e}")
+        except Exception as e:
+            print(f"錯誤: 處理 FinMind 數據時發生預期外的錯誤 (股票代碼: {stock_id}): {e}")
 
-        print("正在儲存數據至本地資料庫...")
-        save_to_db(all_metrics_df, DB_PATH, TABLE_NAME)
-    else:
-        print("未能獲取任何指標數據，程序終止。")
+        # API 呼叫之間加入延遲以避免觸發速率限制
+        time.sleep(1) 
+        print(f"  進度: {i+1}/{len(stock_ids)}")
 
-    print("數據更新流程完成。")
+    if not all_data:
+        print("警告: 未能從 FinMind 下載任何數據。")
+        return pd.DataFrame()
+        
+    return pd.concat(all_data, ignore_index=True)
+
+def get_stock_info(stock_ids: list) -> pd.DataFrame:
+    """
+    獲取股票的基本資訊 (公司簡稱, 產業類別)。
+    """
+    base_url = "https://api.finmindtrade.com/api/v4/data"
+    params = {
+        "dataset": "TaiwanStockInfo",
+        "token": FINMIND_API_TOKEN,
+    }
+    try:
+        res = requests.get(base_url, params=params)
+        res.raise_for_status()
+        data = res.json()
+        if data['msg'] == 'success':
+            df = pd.DataFrame(data['data'])
+            df = df[df['stock_id'].isin(stock_ids)]
+            return df[['stock_id', 'stock_name', 'industry_category']]
+    except Exception as e:
+        print(f"錯誤: 獲取股票基本資訊失敗: {e}")
+    return pd.DataFrame()
+
+
+def update_financial_data():
+    """
+    主函數：更新所有股票的最新財務數據到資料庫。
+    """
+    print("\n--- 開始更新每日財務指標 ---")
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d') # 只抓最近5天，加快速度
+
+    # 1. 抓取財務數據
+    financial_df = fetch_finmind_data(TICKER_LIST, start_date, end_date)
+    if financial_df.empty:
+        print("未獲取任何財務數據，終止更新。")
+        return
+
+    # 2. 抓取公司基本資訊
+    info_df = get_stock_info(TICKER_LIST)
+    if not info_df.empty:
+        financial_df = pd.merge(financial_df, info_df, on='stock_id', how='left')
+
+    # 3. 數據清洗
+    financial_df['date'] = pd.to_datetime(financial_df['date']).dt.date
+    numeric_cols = ['pe_ratio', 'pb_ratio', 'yield', 'close_price']
+    for col in numeric_cols:
+        financial_df[col] = pd.to_numeric(financial_df[col], errors='coerce')
+    
+    # 只保留最新的數據
+    financial_df = financial_df.sort_values('date').groupby('stock_id').last().reset_index()
+
+    # 4. 寫入資料庫
+    with sqlite3.connect(DB_PATH) as conn:
+        financial_df.to_sql('daily_metrics', conn, if_exists='replace', index=False,
+                            dtype={'stock_id': 'TEXT', 'date': 'DATE'})
+    print(f"成功將 {len(financial_df)} 筆最新的財務數據寫入資料庫。")
+
+def main():
+    """
+    執行整個數據更新流程的主函數。
+    """
+    print(f"--- 數據庫更新程序啟動 ({datetime.now()}) ---")
+    
+    # 步驟 1: 確保資料庫與表格存在
+    setup_database()
+    
+    # 步驟 2: 更新財務數據 (核心)
+    update_financial_data()
+    
+    # 步驟 3: 更新新聞情緒數據 (衛星)
+    update_news_sentiment_for_stocks(TICKER_LIST, DB_PATH)
+    
+    print(f"--- 所有數據更新完畢 ({datetime.now()}) ---")
+
 
 if __name__ == "__main__":
-    main()
-
-
-
+    # 讓此腳本可以獨立執行
+    if not FINMIND_API_TOKEN:
+        print("錯誤：請在 config.py 中設定您的 FinMind API Token。")
+    else:
+        main()
