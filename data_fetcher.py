@@ -1,6 +1,7 @@
 import yfinance as yf
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 # --- 台股成分股列表 ---
 # 為了演示，我們選取台灣50指數 + 部分中小型潛力股作為基礎股票池
@@ -17,17 +18,21 @@ TICKER_LIST = [
 def get_stock_data():
     """
     使用 yfinance 下載所有目標股票的即時數據。
-    使用 Streamlit 的快取功能避免重複下載。
+    [優化版] 增加更詳細的錯誤回報機制。
     """
     all_info = []
-    progress_bar = st.progress(0, text="正在下載市場數據...")
+    failed_tickers = []
+    progress_bar = st.progress(0, text="正在初始化數據下載...")
     
     for i, ticker_id in enumerate(TICKER_LIST):
         try:
             ticker_obj = yf.Ticker(ticker_id)
-            # .info 是一個包含大量詳細資訊的字典
             info = ticker_obj.info
-            # 我們只選取需要的欄位，並加上 tickerId
+            
+            # [優化] 增加一道驗證：確保關鍵數據存在，否則視為失敗
+            if not info or info.get('marketCap') is None or info.get('regularMarketPrice') is None:
+                raise ValueError(f"缺少 {ticker_id} 的關鍵市場數據 (例如市值)，可能已下市或為無效代碼。")
+
             filtered_info = {
                 'tickerId': ticker_id,
                 'shortName': info.get('shortName'),
@@ -45,26 +50,35 @@ def get_stock_data():
             }
             all_info.append(filtered_info)
         except Exception as e:
-            # st.warning(f"無法獲取 {ticker_id} 的數據: {e}")
-            pass # 如果有股票下市或暫停交易，直接跳過
+            # 如果有股票下市或暫停交易，紀錄起來並在最後回報
+            failed_tickers.append(ticker_id)
         
-        progress_bar.progress((i + 1) / len(TICKER_LIST), text=f"正在下載 {ticker_id} 的數據...")
+        progress_bar.progress((i + 1) / len(TICKER_LIST), text=f"正在下載 {i+1}/{len(TICKER_LIST)}: {ticker_id} ...")
 
-    progress_bar.empty() # 清除進度條
+    progress_bar.empty()
     
+    # [優化] 如果有部分股票下載失敗，在 UI 上顯示警告，讓使用者知道
+    if failed_tickers:
+        st.warning(f"注意：以下 {len(failed_tickers)} 支股票的數據獲取失敗，已被忽略。原因可能是已下市、暫停交易或網路問題： **{', '.join(failed_tickers)}**")
+
     if not all_info:
+        # 只有在 *所有* 股票都失敗時，才返回空的 DataFrame
         return pd.DataFrame()
 
     df = pd.DataFrame(all_info)
     df = df.set_index('tickerId')
     
-    # 數據清洗：將 None 或 無效值轉換為 np.nan，並設定正確的數據類型
+    # 數據清洗：暫存原始的字串欄位
+    string_cols = df[['shortName', 'industry']].copy()
+
+    # 將所有欄位嘗試轉為數值，失敗的會變成 NaN
     df = df.apply(pd.to_numeric, errors='coerce')
-    # shortName 和 industry 是字串，需要另外處理
-    df['shortName'] = [info.get('shortName') for info in all_info]
-    df['industry'] = [info.get('industry') for info in all_info]
+
+    # 還原字串欄位
+    df['shortName'] = string_cols['shortName']
+    df['industry'] = string_cols['industry']
     
-    # 移除缺少關鍵數據的行
+    # 移除缺少關鍵數據的行 (例如 beta, marketCap)
     df.dropna(subset=['marketCap', 'beta', 'averageVolume', 'shortName'], inplace=True)
     
     return df
