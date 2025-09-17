@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np # 引入 numpy 來進行更穩定的數值操作
 import google.generativeai as genai
 from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 import plotly.graph_objects as go
-import plotly.express as px # 引入 Express 以使用更豐富的顏色主題
+import plotly.express as px
 import json
 from datetime import datetime
 import re
@@ -100,7 +101,7 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
             response = chain.invoke(input_data)
             return _clean_and_parse_json(response['text'])
 
-# --- [圖表優化最終版] 報告可視化 ---
+# --- [最終偵錯版] 報告可視化 ---
 def display_report(report_data, investment_amount, portfolio_type):
     INDUSTRY_MAP = {
         'Semiconductors': '半導體', 'Computer Hardware': '電腦硬體',
@@ -133,16 +134,18 @@ def display_report(report_data, investment_amount, portfolio_type):
         df = pd.DataFrame(report_data.get('holdings', []))
 
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
-    df.dropna(subset=['weight'], inplace=True) # 確保權重是有效數字
+    df.dropna(subset=['weight'], inplace=True)
     df = df[df['weight'] > 0].copy()
     if not df.empty:
-        df['weight'] = df['weight'] / df['weight'].sum()
+        total_weight = df['weight'].sum()
+        df['weight'] = df['weight'] / total_weight
     else:
         st.warning("AI 生成的投資組合中沒有有效的持股。")
         return
         
     df.sort_values(by='weight', ascending=False, inplace=True)
-    df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round().astype(int)
+    # [解決方案] 強化計算，徹底根除驚嘆號
+    df['資金分配 (TWD)'] = np.floor(df['weight'] * investment_amount).astype(int)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
     if 'industry' in df.columns:
         df['industry_zh'] = df['industry'].map(INDUSTRY_MAP).fillna(df['industry'])
@@ -152,25 +155,27 @@ def display_report(report_data, investment_amount, portfolio_type):
     chart1, chart2 = st.columns(2)
 
     with chart1:
-        # [解決方案] 優化圓餅圖 (趴樹)
         fig_pie = px.pie(df, values='weight', names='name', hole=.3,
                          title='持股權重分配',
-                         color_discrete_sequence=px.colors.qualitative.Plotly) # 使用更多樣的顏色
+                         color_discrete_sequence=px.colors.qualitative.Plotly)
         fig_pie.update_traces(textposition='inside', textinfo='percent+label',
                               hovertemplate='%{label}<br>權重: %{percent:.2%}')
         fig_pie.update_layout(showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with chart2:
-        # [解決方案] 重構混合型圖表邏輯
+        # [解決方案] 修正混合型圖表分類邏輯
         if portfolio_type == "混合型":
+            # 確保 industry_zh 欄位存在，即使全為 NaN
+            if 'industry_zh' not in df.columns:
+                df['industry_zh'] = '其他'
+            else:
+                df['industry_zh'].fillna('其他', inplace=True)
+                
             df['chart_category'] = df.apply(
-                lambda row: 'ETF 核心' if 'etf_type' in row and pd.notna(row['etf_type']) else row.get('industry_zh', '其他'),
+                lambda row: 'ETF 核心' if 'etf_type' in row and pd.notna(row['etf_type']) else row['industry_zh'],
                 axis=1
             )
-            # 修正 Bug：確保 industry_zh 在 lambda 函數中被正確使用
-            df['chart_category'].fillna('其他', inplace=True)
-
             grouped = df.groupby('chart_category')['weight'].sum().reset_index()
             chart_title, x_col = '資產類別分佈', 'chart_category'
         elif 'industry_zh' in df.columns:
