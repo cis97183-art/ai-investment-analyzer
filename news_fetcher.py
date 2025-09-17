@@ -1,95 +1,107 @@
-import sqlite3
 import pandas as pd
+import sqlite3
 from datetime import datetime, timedelta
+import random
 
-def simple_sentiment_analysis(headline: str) -> tuple[str, float]:
-    """
-    [Phase 2] 簡易的情緒分析實作 (關鍵字法)。
-    返回 (情緒類別, 分數)。
-    """
-    positive_keywords = ['創高', '利多', '成長', '優於預期', '上修', '強勁', '大漲', '擴廠', '報喜']
-    negative_keywords = ['衰退', '利空', '虧損', '低於預期', '下修', '疲軟', '大跌', '裁員', '警訊']
-    
-    score = 0
-    for p_word in positive_keywords:
-        if p_word in headline:
-            score += 1
-    for n_word in negative_keywords:
-        if n_word in headline:
-            score -= 1
-    
-    if score > 0:
-        return '正面', 1.0
-    elif score < 0:
-        return '負面', -1.0
-    else:
-        return '中性', 0.0
+# --- 模擬新聞數據庫 ---
+# 在真實世界中，這會由一個真正的新聞 API 取代
+SIMULATED_NEWS_DATABASE = {
+    "2330": [
+        {"date": "2025-09-16", "headline": "台積電宣布3奈米製程取得重大突破，產能將翻倍", "source": "經濟日報"},
+        {"date": "2025-09-15", "headline": "外資持續看好！高盛上調台積電目標價至900元", "source": "路透社"},
+        {"date": "2025-09-12", "headline": "分析師警告：半導體產業面臨庫存調整壓力", "source": "彭博社"}
+    ],
+    "2317": [
+        {"date": "2025-09-16", "headline": "鴻海電動車Model C正式量產，預計第四季開始交車", "source": "工商時報"},
+        {"date": "2025-09-14", "headline": "鴻海集團布局東南亞，宣布在印尼設立新廠", "source": "中央社"}
+    ],
+    "2881": [
+        {"date": "2025-09-15", "headline": "富邦金控前三季獲利創新高，EPS達8.5元", "source": "財訊快報"},
+        {"date": "2025-09-13", "headline": "央行利率決策在即，金融股走勢相對穩健", "source": "鉅亨網"}
+    ],
+    "2603": [
+        {"date": "2025-09-16", "headline": "長榮海運增開歐洲線，運價指數反彈", "source": "航運界"},
+        {"date": "2025-09-11", "headline": "全球貨櫃需求放緩，BDI指數連三天下滑", "source": "國際船舶網"}
+    ]
+}
 
-def fetch_mock_news(stock_id: str) -> list[dict]:
+def get_simulated_news(stock_id: str) -> list:
     """
-    模擬新聞 API 的行為。
-    在真實應用中，這裡會是對外部新聞 API (如 Google News) 的 HTTP 請求。
+    模擬從 API 獲取指定股票的新聞。
     """
-    # 模擬一些可能的新聞標題
-    mock_headlines = {
-        "2330": [
-            f"台積電 CoWoS 產能吃緊，獲利成長優於預期",
-            f"外資上修台積電目標價，看好 AI 強勁需求",
-            f"地緣政治風險影響，台積電供應鏈面臨挑戰"
-        ],
-        "2317": [
-            f"鴻海電動車業務報喜，Q3 營收有望創高",
-            f"蘋果新機銷售疲軟，鴻海面臨訂單下修壓力"
-        ],
-        "2881": [
-            f"富邦金控獲利穩健成長，蟬聯金控獲利王",
-            f"央行升息恐衝擊銀行利差，金融股前景轉趨保守"
-        ],
-        "2603": [
-            f"貨櫃航運景氣觸底？長榮海運靜待需求回溫",
-            f"運價指數持續破底，長榮營收面臨衰退"
-        ]
-    }
+    # 為了演示，我們回傳資料庫中儲存的新聞，或者一個空列表
+    return SIMULATED_NEWS_DATABASE.get(stock_id, [])
+
+
+def analyze_sentiment(headline: str) -> tuple:
+    """
+    模擬對新聞標題進行情緒分析。
+    """
+    # 這是一個非常簡化的模型，真實世界中會使用 NLP 模型
+    positive_keywords = ["突破", "上調", "創新高", "量產", "新廠", "反彈", "看好"]
+    negative_keywords = ["警告", "壓力", "放緩", "下滑", "不穩"]
     
-    today = datetime.now()
-    if stock_id in mock_headlines:
-        return [
-            {
-                "stock_id": stock_id,
-                "news_date": (today - timedelta(days=i)).strftime('%Y-%m-%d'),
-                "headline": headline,
-                "source": "模擬新聞網"
-            }
-            for i, headline in enumerate(mock_headlines[stock_id])
-        ]
-    return []
+    score = 0.5 # 中性
+    category = "Neutral"
+
+    if any(keyword in headline for keyword in positive_keywords):
+        score = random.uniform(0.7, 0.9)
+        category = "Positive"
+    elif any(keyword in headline for keyword in negative_keywords):
+        score = random.uniform(0.1, 0.4)
+        category = "Negative"
+        
+    return round(score, 2), category
+
 
 def update_news_sentiment_for_stocks(stock_ids: list, db_path: str):
     """
-    [Phase 2] 針對給定的股票列表，更新新聞與情緒分析結果到資料庫。
+    [防重複更新版] 更新指定股票列表的新聞與情緒分數到資料庫。
     """
     print("\n--- 開始更新新聞情緒數據 ---")
     all_news = []
+
     for i, stock_id in enumerate(stock_ids):
-        # 1. 抓取新聞 (目前為模擬)
-        news_items = fetch_mock_news(stock_id)
-        
-        for item in news_items:
-            # 2. 進行情緒分析
-            sentiment_category, sentiment_score = simple_sentiment_analysis(item['headline'])
-            item['sentiment_category'] = sentiment_category
-            item['sentiment_score'] = sentiment_score
-            all_news.append(item)
+        news_items = get_simulated_news(stock_id)
         print(f"  進度: {i+1}/{len(stock_ids)} (找到 {len(news_items)} 則 '{stock_id}' 的新聞)")
 
+        for item in news_items:
+            sentiment_score, sentiment_category = analyze_sentiment(item['headline'])
+            all_news.append({
+                "stock_id": stock_id,
+                "news_date": item['date'],
+                "headline": item['headline'],
+                "source": item['source'],
+                "sentiment_score": sentiment_score,
+                "sentiment_category": sentiment_category
+            })
+    
     if not all_news:
-        print("未發現任何新新聞。")
+        print("未找到任何新新聞可供更新。")
         return
 
-    # 3. 將結果寫入資料庫
     news_df = pd.DataFrame(all_news)
+
     with sqlite3.connect(db_path) as conn:
-        # 使用 'OR IGNORE' 來處理 UNIQUE 限制，避免因重複新聞而導致整個交易失敗
-        news_df.to_sql('news_sentiment', conn, if_exists='append', index=False)
-    
-    print(f"成功處理 {len(news_df)} 則新聞並更新至資料庫。")
+        # --- 解決方案核心 ---
+        # 1. 讀取資料庫中已有的新聞標題
+        try:
+            existing_headlines = pd.read_sql("SELECT stock_id, headline FROM news_sentiment", conn)
+            existing_headlines_set = set(zip(existing_headlines['stock_id'], existing_headlines['headline']))
+        except (pd.io.sql.DatabaseError, sqlite3.OperationalError):
+            existing_headlines_set = set() # 如果表格不存在，就當作是空的
+
+        # 2. 過濾掉重複的新聞
+        # 建立一個 (stock_id, headline) 的元組欄位用於比對
+        news_df['unique_key'] = list(zip(news_df['stock_id'], news_df['headline']))
+        # 只保留 unique_key 不在現有集合中的新聞
+        new_records_df = news_df[~news_df['unique_key'].isin(existing_headlines_set)]
+        new_records_df = new_records_df.drop(columns=['unique_key']) # 移除輔助欄位
+
+        # 3. 只將真正新的新聞寫入資料庫
+        if not new_records_df.empty:
+            new_records_df.to_sql('news_sentiment', conn, if_exists='append', index=False)
+            print(f"成功將 {len(new_records_df)} 則新新聞寫入資料庫。")
+        else:
+            print("資料庫中已包含所有找到的新聞，無需更新。")
+
