@@ -164,11 +164,14 @@ def update_financial_data():
     # 只保留最新的數據
     financial_df = financial_df.sort_values('date').groupby('stock_id').last().reset_index()
 
-    # 4. 寫入資料庫
-    with sqlite3.connect(DB_PATH) as conn:
-        financial_df.to_sql('daily_metrics', conn, if_exists='replace', index=False,
-                            dtype={'stock_id': 'TEXT', 'date': 'DATE'})
-    print(f"成功將 {len(financial_df)} 筆最新的財務數據寫入資料庫。")
+    # 4. 寫入資料庫 (增加保護機制)
+    if not financial_df.empty:
+        with sqlite3.connect(DB_PATH) as conn:
+            financial_df.to_sql('daily_metrics', conn, if_exists='replace', index=False,
+                                dtype={'stock_id': 'TEXT', 'date': 'DATE'})
+        print(f"成功將 {len(financial_df)} 筆最新的財務數據寫入資料庫。")
+    else:
+        print("警告：由於未能獲取有效的財務數據，本次未更新資料庫，保留舊有數據。")
 
 def main():
     """
@@ -194,3 +197,4 @@ if __name__ == "__main__":
         print("錯誤：請在 config.py 中設定您的 FinMind API Token。")
     else:
         main()
+
