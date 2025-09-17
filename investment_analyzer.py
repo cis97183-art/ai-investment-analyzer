@@ -5,6 +5,7 @@ from langchain.chains import LLMChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 import plotly.graph_objects as go
+import plotly.express as px # 引入 Express 以使用更豐富的顏色主題
 import json
 from datetime import datetime
 import re
@@ -99,14 +100,14 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
             response = chain.invoke(input_data)
             return _clean_and_parse_json(response['text'])
 
-# --- [最終優化版] 報告可視化 ---
+# --- [圖表優化最終版] 報告可視化 ---
 def display_report(report_data, investment_amount, portfolio_type):
-    # [解決方案] 產業中英對照表
     INDUSTRY_MAP = {
         'Semiconductors': '半導體', 'Computer Hardware': '電腦硬體',
         'Financial Services': '金融服務', 'Conglomerates': '綜合企業',
         'Shipping & Ports': '航運與港口', 'Telecom Services': '電信服務',
-        # ...可持續擴充...
+        'Electronic Components': '電子零組件', 'Plastics': '塑膠',
+        'Cement': '水泥'
     }
 
     st.header(report_data['summary']['title'])
@@ -123,29 +124,26 @@ def display_report(report_data, investment_amount, portfolio_type):
 
     st.write("---")
 
-    # --- 數據準備與清洗 (核心) ---
+    # --- 數據準備與清洗 ---
     if 'core_holdings' in report_data:
-        core_df = pd.DataFrame(report_data['core_holdings'])
-        sat_df = pd.DataFrame(report_data['satellite_holdings'])
-        # [解決方案] 為混合型增加資產類別欄位
-        core_df['asset_class'] = '核心部位 (ETF)'
-        sat_df['asset_class'] = '衛星部位 (個股)'
+        core_df = pd.DataFrame(report_data.get('core_holdings', []))
+        sat_df = pd.DataFrame(report_data.get('satellite_holdings', []))
         df = pd.concat([core_df, sat_df], ignore_index=True)
     else:
-        df = pd.DataFrame(report_data['holdings'])
+        df = pd.DataFrame(report_data.get('holdings', []))
 
-    # [解決方案] 過濾權重為 0 或空的標的，並重新計算權重
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
+    df.dropna(subset=['weight'], inplace=True) # 確保權重是有效數字
     df = df[df['weight'] > 0].copy()
     if not df.empty:
         df['weight'] = df['weight'] / df['weight'].sum()
     else:
         st.warning("AI 生成的投資組合中沒有有效的持股。")
         return
-
-    df['資金分配 (TWD)'] = (df['weight'] * investment_amount).astype(int)
+        
+    df.sort_values(by='weight', ascending=False, inplace=True)
+    df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round().astype(int)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
-    # [解決方案] 轉換產業名稱為中文
     if 'industry' in df.columns:
         df['industry_zh'] = df['industry'].map(INDUSTRY_MAP).fillna(df['industry'])
 
@@ -154,19 +152,27 @@ def display_report(report_data, investment_amount, portfolio_type):
     chart1, chart2 = st.columns(2)
 
     with chart1:
-        fig_pie = go.Figure(data=[go.Pie(
-            labels=df['name'], values=df['weight'], hole=.3,
-            textinfo='percent+label', hoverinfo='label+percent+value',
-            texttemplate='%{label}<br>%{percent:.1%}',
-        )])
-        fig_pie.update_layout(title_text='持股權重分配', showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+        # [解決方案] 優化圓餅圖 (趴樹)
+        fig_pie = px.pie(df, values='weight', names='name', hole=.3,
+                         title='持股權重分配',
+                         color_discrete_sequence=px.colors.qualitative.Plotly) # 使用更多樣的顏色
+        fig_pie.update_traces(textposition='inside', textinfo='percent+label',
+                              hovertemplate='%{label}<br>權重: %{percent:.2%}')
+        fig_pie.update_layout(showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with chart2:
-        # [解決方案] 根據投資組合類型，動態決定長條圖內容
+        # [解決方案] 重構混合型圖表邏輯
         if portfolio_type == "混合型":
-            grouped = df.groupby('asset_class')['weight'].sum().reset_index()
-            chart_title, x_col = '核心-衛星資產分佈', 'asset_class'
+            df['chart_category'] = df.apply(
+                lambda row: 'ETF 核心' if 'etf_type' in row and pd.notna(row['etf_type']) else row.get('industry_zh', '其他'),
+                axis=1
+            )
+            # 修正 Bug：確保 industry_zh 在 lambda 函數中被正確使用
+            df['chart_category'].fillna('其他', inplace=True)
+
+            grouped = df.groupby('chart_category')['weight'].sum().reset_index()
+            chart_title, x_col = '資產類別分佈', 'chart_category'
         elif 'industry_zh' in df.columns:
             grouped = df.groupby('industry_zh')['weight'].sum().reset_index()
             chart_title, x_col = '產業權重分佈 (中文)', 'industry_zh'
@@ -189,13 +195,14 @@ def display_report(report_data, investment_amount, portfolio_type):
     st.write("---")
     st.subheader("📝 詳細持股與資金計畫")
     display_cols = ['ticker', 'name']
-    if 'industry_zh' in df.columns: display_cols.append('industry_zh')
-    if 'etf_type' in df.columns: display_cols.append('etf_type')
+    if 'industry_zh' in df.columns and df['industry_zh'].notna().any():
+        display_cols.append('industry_zh')
+    if 'etf_type' in df.columns and df['etf_type'].notna().any():
+        display_cols.append('etf_type')
     display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
     
-    # 使用中文產業欄位
     df.rename(columns={'industry_zh': '產業類別'}, inplace=True)
-    final_cols = [col for col in display_cols if col in df.columns or col == '產業類別']
+    final_cols = [col for col in display_cols if col in df.columns]
 
     st.dataframe(df[final_cols], use_container_width=True, hide_index=True,
         column_config={
@@ -255,7 +262,6 @@ if analyze_button:
         st.session_state.portfolio_generated = True
 
 if st.session_state.portfolio_generated and st.session_state.report_data:
-    # 傳入 portfolio_type_input 以便函式內部判斷
     display_report(st.session_state.report_data, investment_amount_input, portfolio_type_input)
     
     st.write("---")
