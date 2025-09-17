@@ -1,52 +1,45 @@
 import pandas as pd
+import streamlit as st
 
-def screen_stocks(market_data_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
+def screen_stocks(market_data: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
     """
-    [更新版] 根據財務指標與新聞情緒，從市場數據中篩選出候選股票。
-    
-    Args:
-        market_data_df: 包含所有股票財務與新聞情緒的 DataFrame。
-        risk_profile: 投資者的風險偏好 ('保守型', '穩健型', '積極型')。
-
-    Returns:
-        一個符合篩選條件的候選股票 DataFrame。
+    [yfinance 版] 根據使用者風險偏好，從融合後的市場數據中篩選出候選股票。
     """
-    if market_data_df.empty:
+    if market_data.empty:
         return pd.DataFrame()
 
-    # --- 步驟 1: 建立篩選條件 ---
-    conditions = []
+    # 複製一份數據以避免修改原始快取
+    df = market_data.copy()
     
-    # 共通規則：排除新聞情緒為負面的股票
-    conditions.append(market_data_df['sentiment_category'] != '負面')
-    # 共通規則：排除沒有 P/E 或 P/B 值的股票
-    conditions.append(market_data_df['pe_ratio'].notna() & (market_data_df['pe_ratio'] > 0))
-    conditions.append(market_data_df['pb_ratio'].notna() & (market_data_df['pb_ratio'] > 0))
+    # 基本過濾條件 (對所有類型都適用)
+    # 移除 PE 或 PB 為負或空值的股票，這些通常是虧損或數據不足的公司
+    df.dropna(subset=['pe_ratio', 'pb_ratio'], inplace=True)
+    df = df[(df['pe_ratio'] > 0) & (df['pb_ratio'] > 0)]
 
-    # --- 步驟 2: 根據風險偏好添加特定規則 ---
+    # 根據風險偏好設定不同的篩選條件
     if risk_profile == '保守型':
-        conditions.append(market_data_df['pe_ratio'] < 15)
-        conditions.append(market_data_df['pb_ratio'] < 2)
-        conditions.append(market_data_df['yield'] > 0.04) # 殖利率 > 4%
-        
-    elif risk_profile == '穩健型':
-        conditions.append(market_data_df['pe_ratio'] < 25)
-        conditions.append(market_data_df['pb_ratio'] < 4)
-        conditions.append(market_data_df['yield'] > 0.025) # 殖利率 > 2.5%
-        
-    elif risk_profile == '積極型':
-        conditions.append(market_data_df['pe_ratio'] < 50)
-        # 對於積極型，我們可能更關注成長性，對 P/B 和殖利率的限制較寬鬆
-        
-    # --- 步驟 3: 應用所有篩選條件 ---
-    if not conditions:
-        return market_data_df # 如果沒有條件，返回全部
+        st.write("篩選規則 (保守型): P/E < 20, P/B < 2, 殖利率 > 3%")
+        result_df = df[
+            (df['pe_ratio'] < 20) &
+            (df['pb_ratio'] < 2) &
+            (df['yield'] > 3)
+        ].sort_values(by='yield', ascending=False)
 
-    # 將所有條件用 '&' 結合起來
-    final_condition = pd.Series(True, index=market_data_df.index)
-    for cond in conditions:
-        final_condition &= cond
+    elif risk_profile == '穩健型':
+        st.write("篩選規則 (穩健型): P/E < 25, P/B < 4")
+        result_df = df[
+            (df['pe_ratio'] < 25) &
+            (df['pb_ratio'] < 4)
+        ].sort_values(by='pe_ratio', ascending=True)
+
+    elif risk_profile == '積極型':
+        st.write("篩選規則 (積極型): P/B < 6, 優先選擇正面新聞較多的股票")
+        result_df = df[
+            (df['pb_ratio'] < 6)
+        ].sort_values(by=['Positive', 'pe_ratio'], ascending=[False, True])
         
-    screened_df = market_data_df[final_condition].copy()
-    
-    return screened_df
+    else:
+        result_df = df
+
+    return result_df
+

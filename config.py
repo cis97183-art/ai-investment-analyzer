@@ -1,3 +1,0 @@
-# FinMind API Token
-# 為了您的帳戶安全，請將此金鑰視為密碼，不要分享給他人或上傳到公開的程式碼倉庫。
-FINMIND_API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNS0wOS0xNyAxODo1NzoyNSIsInVzZXJfaWQiOiJhbHZpbmh1YW5nIiwiaXAiOiIxMTguMjMyLjExNS4yNDMiLCJleHAiOjE3NTg3MTE0NDV9.CgFlKs8kYYb7cpr_7vej7e276LSeAZ7-3qR98fLgRkI"

@@ -10,19 +10,18 @@ from datetime import datetime
 import re
 import os
 import time
-# 由於 update_database 現在是獨立執行的腳本，主應用程式不再直接呼叫它
-# from update_database import main as run_db_update
 
-# --- 導入新的專案模組 (新一代架構) ---
+# --- 導入新的專案模組 (yfinance 架構) ---
+from update_database import main as run_db_update
 from etf_rules import ETF_PROMPT_FRAMEWORK
 from prompts import get_data_driven_prompt_templates, STOCK_PROMPT_FRAMEWORK
-from data_loader import load_data_from_db # [更新] 從本地資料庫讀取融合後數據
-from screener import screen_stocks # [更新] 使用包含新聞情緒的篩選器
+from data_loader import load_and_merge_data # [新] 使用新的數據融合函式
+from screener import screen_stocks
 
 # --- 專案說明 ---
-st.set_page_config(page_title="台股分析引擎 (新一代混合式架構)", layout="wide")
-st.title("📊 新一代台股分析引擎 (財務+新聞情緒)")
-st.markdown("本系統採用 **FinMind API** 結合 **本地數據庫** 的高效混合式架構。數據每日自動更新，並融合**新聞情緒分析**，提供您更深度的市場洞察力。")
+st.set_page_config(page_title="台股分析引擎 (yfinance 穩定版)", layout="wide")
+st.title("📊 高效台股分析引擎 (yfinance 穩定版)")
+st.markdown("本系統採用 **yfinance** 作為核心數據源，結合本地數據庫進行高效分析。數據可手動更新，提供您閃電般的篩選速度與穩定可靠的數據品質。")
 
 # --- Google API 金鑰設定 ---
 try:
@@ -36,13 +35,17 @@ except (KeyError, Exception) as e:
 DB_PATH = "tw_stock_data.db"
 if not os.path.exists(DB_PATH):
     st.warning(f"警告：找不到本地資料庫檔案 '{DB_PATH}'。")
-    st.info("這可能是您首次執行本應用程式。請先在您的終端機/命令提示字元中，手動執行以下指令來建立本地資料庫。")
-    st.code("python update_database.py", language="bash")
-    st.markdown("> **注意**：首次執行此指令需要幾分鐘時間。成功執行後，請重新整理此頁面。")
+    st.info("這可能是您首次執行本應用程式。請點擊下方按鈕來下載最新的市場數據並建立本地資料庫。")
+    if st.button("建立 / 更新本地市場資料庫", type="primary", use_container_width=True):
+        with st.spinner("正在執行數據庫更新程序，請稍候..."):
+            run_db_update()
+        st.success("資料庫建立成功！應用程式將在 3 秒後自動重新載入。")
+        time.sleep(3)
+        st.rerun()
     st.stop()
     
 # --- 應用程式啟動時，一次性載入所有市場數據 ---
-market_data = load_data_from_db()
+market_data = load_and_merge_data()
 
 # --- RAG 核心邏輯 ---
 def get_llm_chain(prompt_template):
@@ -69,17 +72,17 @@ def _clean_and_parse_json(raw_text: str):
     try:
         return json.loads(clean_text)
     except json.JSONDecodeError as e:
-        st.error("JSON 解析失敗。AI 回傳的格式有誤，請稍後再試。")
+        st.error("JSON 解析失敗。")
         st.code(raw_text, language="text")
         raise e
 
 # --- 報告生成與可視化 ---
 def generate_portfolio(portfolio_type, risk_profile, investment_amount):
-    """[新一代架構版] 根據本地融合數據庫篩選結果生成投資報告"""
+    """[yfinance 版] 根據本地數據庫篩選結果生成投資報告"""
 
     if portfolio_type in ["純個股", "混合型"]:
         # --- 步驟 1: 從已載入的 market_data 中進行篩選 ---
-        with st.spinner("步驟 1/2: 正在從本地資料庫進行量化與新聞情緒篩選..."):
+        with st.spinner("步驟 1/2: 正在從本地資料庫進行量化篩選..."):
             if market_data.empty:
                 st.error("市場數據為空，無法進行篩選。請先執行 'update_database.py'。")
                 return None
@@ -90,8 +93,9 @@ def generate_portfolio(portfolio_type, risk_profile, investment_amount):
                 st.warning(f"根據您的 '{risk_profile}' 規則，在目前的市場數據中找不到滿足所有條件的股票。請嘗試更換風險偏好或等待明日數據更新。")
                 return None
             
-            # 準備給 LLM 的 CSV 字串 (使用新的欄位)
-            candidate_data_for_llm = candidate_df[['stock_id', 'stock_name', 'industry_category', 'pe_ratio', 'pb_ratio', 'yield', 'sentiment_category']].to_csv(index=False)
+            # [新] 準備給 LLM 的 CSV 字串 (使用 yfinance 的欄位)
+            csv_columns = ['stock_id', 'stock_name', 'industry_category', 'pe_ratio', 'pb_ratio', 'yield', 'close_price', 'Positive', 'Negative', 'headline']
+            candidate_data_for_llm = candidate_df[csv_columns].to_csv(index=False)
 
         # --- 步驟 2: 將結果交給 AI 分析 ---
         with st.spinner("步驟 2/2: 已完成量化篩選！正在將候選名單交由 AI 進行最終質化分析..."):
@@ -149,27 +153,11 @@ def display_report(report_data, investment_amount):
     if 'core_holdings' in report_data:
         core_df = pd.DataFrame(report_data['core_holdings'])
         sat_df = pd.DataFrame(report_data['satellite_holdings'])
-        sat_df['ticker'] = sat_df['ticker'].astype(str)
         df = pd.concat([core_df, sat_df], ignore_index=True)
         st.subheader("視覺化分析：整體資產配置")
-
-        if 'latest_news_headline' in market_data.columns:
-            news_map = market_data.set_index('stock_id')['latest_news_headline'].to_dict()
-            df['stock_id_map'] = df['ticker'].str.replace('.TW', '')
-            df['latest_news'] = df['stock_id_map'].map(news_map)
-            df.drop(columns=['stock_id_map'], inplace=True)
-
     else:
         df = pd.DataFrame(report_data['holdings'])
-        df['ticker'] = df['ticker'].astype(str)
         st.subheader("視覺化分析")
-        
-        if 'latest_news_headline' in market_data.columns:
-            news_map = market_data.set_index('stock_id')['latest_news_headline'].to_dict()
-            df['stock_id_map'] = df['ticker'].str.replace('.TW', '')
-            df['latest_news'] = df['stock_id_map'].map(news_map)
-            df.drop(columns=['stock_id_map'], inplace=True)
-
 
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
     df.dropna(subset=['weight'], inplace=True)
@@ -208,7 +196,6 @@ def display_report(report_data, investment_amount):
     display_cols = ['ticker', 'name']
     if 'industry' in df.columns and df['industry'].notna().any(): display_cols.append('industry')
     if 'etf_type' in df.columns and df['etf_type'].notna().any(): display_cols.append('etf_type')
-    if 'latest_news' in df.columns and df['latest_news'].notna().any(): display_cols.append('latest_news')
     display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
     final_cols = [col for col in display_cols if col in df.columns]
 
@@ -216,8 +203,7 @@ def display_report(report_data, investment_amount):
         column_config={
             "權重 (%)": st.column_config.ProgressColumn("權重 (%)", format="%.2f%%", min_value=0, max_value=100),
             "資金分配 (TWD)": st.column_config.NumberColumn("資金分配 (TWD)", format="NT$ %'d"),
-            "rationale": st.column_config.TextColumn("簡要理由 (AI 分析)", width="large"),
-            "latest_news": st.column_config.TextColumn("近期相關新聞", width="medium")
+            "rationale": st.column_config.TextColumn("簡要理由", width="large")
         })
 
 def handle_follow_up_question(question, context):
@@ -245,8 +231,19 @@ with st.sidebar:
     portfolio_type_input = st.radio("1. 請選擇投資組合類型", ("純個股", "純 ETF", "混合型"), index=0)
     risk_profile_input = st.selectbox("2. 請選擇您的風險偏好", ('積極型', '穩健型', '保守型'), index=0)
     investment_amount_input = st.number_input("3. 請輸入您預計投入的總資金 (新台幣)", min_value=10000, value=500000, step=50000)
-    analyze_button = st.button("🚀 生成我的投資組合", type="primary", use_container_width=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        analyze_button = st.button("🚀 生成投資組合", type="primary", use_container_width=True)
+    with col2:
+        if st.button("🔄 更新市場數據", use_container_width=True):
+            with st.spinner("正在執行數據庫更新程序，請稍候..."):
+                run_db_update()
+            st.success("數據庫更新成功！")
+            st.rerun()
+
     st.info("免責聲明：本系統僅為AI輔助分析工具，所有建議僅供參考，不構成任何投資決策之依據。")
+
 
 if analyze_button:
     st.session_state.messages = []
@@ -254,7 +251,6 @@ if analyze_button:
     st.session_state.portfolio_generated = False
     
     if market_data.empty:
-        st.error("市場數據為空或載入失敗，無法生成報告。")
         st.stop()
 
     report = generate_portfolio(portfolio_type_input, risk_profile_input, investment_amount_input)
