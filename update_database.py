@@ -82,7 +82,7 @@ def fetch_finmind_data(stock_ids: list, start_date: str, end_date: str) -> pd.Da
             res.raise_for_status()
             data = res.json()
 
-            if data['msg'] == 'success':
+            if data['msg'] == 'success' and data['data']:
                 df = pd.DataFrame(data['data'])
                 # 欄位重新命名以符合我們的資料庫結構
                 df.rename(columns={
@@ -97,7 +97,7 @@ def fetch_finmind_data(stock_ids: list, start_date: str, end_date: str) -> pd.Da
                 df = df[['stock_id', 'date', 'pb_ratio', 'pe_ratio', 'yield', 'close_price']]
                 all_data.append(df)
             else:
-                 print(f"警告: FinMind API 回傳 '{data['msg']}' (股票代碼: {stock_id})")
+                 print(f"警告: FinMind API 未回傳有效數據 (股票代碼: {stock_id}, 訊息: {data.get('msg', 'N/A')})")
         
         except requests.exceptions.RequestException as e:
             print(f"錯誤: 請求 FinMind API 失敗 (股票代碼: {stock_id}): {e}")
@@ -141,13 +141,19 @@ def update_financial_data():
     主函數：更新所有股票的最新財務數據到資料庫。
     """
     print("\n--- 開始更新每日財務指標 ---")
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=5)).strftime('%Y-%m-%d') # 只抓最近5天，加快速度
+    # [最終優化] 將結束日期設定為昨天，確保能抓取到已收盤的完整數據
+    end_date_dt = datetime.now() - timedelta(days=1)
+    start_date_dt = end_date_dt - timedelta(days=7) # 將時間窗口擴大到7天，增加數據獲取成功率
+
+    end_date = end_date_dt.strftime('%Y-%m-%d')
+    start_date = start_date_dt.strftime('%Y-%m-%d')
+
+    print(f"數據抓取區間: {start_date} 至 {end_date}")
 
     # 1. 抓取財務數據
     financial_df = fetch_finmind_data(TICKER_LIST, start_date, end_date)
     if financial_df.empty:
-        print("未獲取任何財務數據，終止更新。")
+        print("警告：在指定日期區間內未獲取任何財務數據。將保留資料庫中現有數據。")
         return
 
     # 2. 抓取公司基本資訊
@@ -162,16 +168,26 @@ def update_financial_data():
         financial_df[col] = pd.to_numeric(financial_df[col], errors='coerce')
     
     # 只保留最新的數據
+    financial_df.dropna(subset=numeric_cols, inplace=True) # 移除關鍵數據為空值的行
     financial_df = financial_df.sort_values('date').groupby('stock_id').last().reset_index()
 
     # 4. 寫入資料庫 (增加保護機制)
     if not financial_df.empty:
         with sqlite3.connect(DB_PATH) as conn:
-            financial_df.to_sql('daily_metrics', conn, if_exists='replace', index=False,
-                                dtype={'stock_id': 'TEXT', 'date': 'DATE'})
-        print(f"成功將 {len(financial_df)} 筆最新的財務數據寫入資料庫。")
+            # 使用 'replace' if_exists 策略，這裡需要先讀取舊數據，再合併新數據
+            try:
+                old_df = pd.read_sql("SELECT * FROM daily_metrics", conn)
+                # 將新舊數據合併，並移除重複項，保留最新的
+                combined_df = pd.concat([old_df, financial_df]).drop_duplicates(subset=['stock_id'], keep='last')
+            except pd.io.sql.DatabaseError:
+                # 如果表格不存在，直接使用新數據
+                combined_df = financial_df
+
+            combined_df.to_sql('daily_metrics', conn, if_exists='replace', index=False)
+
+        print(f"成功更新/寫入 {len(financial_df)} 筆最新的財務數據。資料庫總計 {len(combined_df)} 筆記錄。")
     else:
-        print("警告：由於未能獲取有效的財務數據，本次未更新資料庫，保留舊有數據。")
+        print("警告：經過清洗後，沒有有效的財務數據可供更新。")
 
 def main():
     """
@@ -193,8 +209,8 @@ def main():
 
 if __name__ == "__main__":
     # 讓此腳本可以獨立執行
-    if not FINMIND_API_TOKEN:
-        print("錯誤：請在 config.py 中設定您的 FinMind API Token。")
+    if not FINMIND_API_TOKEN or FINMIND_API_TOKEN == "YOUR_FINMIND_API_TOKEN":
+        print("錯誤：請在 config.py 中設定您有效的 FinMind API Token。")
     else:
         main()
 
