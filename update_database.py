@@ -100,12 +100,29 @@ def main():
     
     # 3. 數據清洗與整理
     if not all_metrics_df.empty:
-        all_metrics_df.rename(columns={
+        print("步驟 3/3: 正在進行數據清洗與整理...")
+
+        # [修正] 增加欄位名稱的穩健性處理，以應對 API 可能的大小寫變動
+        rename_map = {
             'dividend_yield': 'yield',
-            'PE': 'pe_ratio',
-            'PB': 'pb_ratio'
-        }, inplace=True)
-        print("步驟 3/3: 正在儲存數據至本地資料庫...")
+            'PE': 'pe_ratio',      # 原始預期大寫
+            'pe': 'pe_ratio',      # 備用小寫
+            'PB': 'pb_ratio',      # 原始預期大寫
+            'pb': 'pb_ratio'       # 備用小寫
+        }
+        
+        # 篩選出 DataFrame 中實際存在的欄位進行重新命名
+        existing_rename_map = {k: v for k, v in rename_map.items() if k in all_metrics_df.columns}
+        all_metrics_df.rename(columns=existing_rename_map, inplace=True)
+
+        # 確保必要的欄位存在，若不存在則給予預設值 (e.g., NA)
+        required_cols = ['pe_ratio', 'pb_ratio', 'yield']
+        for col in required_cols:
+            if col not in all_metrics_df.columns:
+                all_metrics_df[col] = pd.NA
+                print(f"警告：資料來源缺少 '{col}' 欄位，已自動補上 NA 值。")
+
+        print("正在儲存數據至本地資料庫...")
         save_to_db(all_metrics_df, DB_PATH, TABLE_NAME)
     else:
         print("未能獲取任何指標數據，程序終止。")
@@ -114,5 +131,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
