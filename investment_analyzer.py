@@ -11,11 +11,11 @@ import re
 import os
 import time
 
-# --- 導入新的專案模組 (yfinance 架構) ---
+# --- 導入專案模組 ---
 from update_database import main as run_db_update
 from etf_rules import ETF_PROMPT_FRAMEWORK
 from prompts import get_data_driven_prompt_templates, STOCK_PROMPT_FRAMEWORK
-from data_loader import load_and_merge_data # [新] 使用新的數據融合函式
+from data_loader import load_and_merge_data
 from screener import screen_stocks
 
 # --- 專案說明 ---
@@ -31,12 +31,12 @@ except (KeyError, Exception) as e:
     st.info("若在本機端開發，請建立 `.streamlit/secrets.toml` 檔案並設定金鑰。")
     st.stop()
 
-# --- 資料庫存在性檢查與引導建立 ---
+# --- 資料庫檢查與數據載入 ---
 DB_PATH = "tw_stock_data.db"
 if not os.path.exists(DB_PATH):
     st.warning(f"警告：找不到本地資料庫檔案 '{DB_PATH}'。")
-    st.info("這可能是您首次執行本應用程式。請點擊下方按鈕來下載最新的市場數據並建立本地資料庫。")
-    if st.button("建立 / 更新本地市場資料庫", type="primary", use_container_width=True):
+    st.info("請點擊下方按鈕來下載最新的市場數據並建立本地資料庫。")
+    if st.button("建立/更新本地市場資料庫", type="primary", use_container_width=True):
         with st.spinner("正在執行數據庫更新程序，請稍候..."):
             run_db_update()
         st.success("資料庫建立成功！應用程式將在 3 秒後自動重新載入。")
@@ -44,31 +44,17 @@ if not os.path.exists(DB_PATH):
         st.rerun()
     st.stop()
     
-# --- 應用程式啟動時，一次性載入所有市場數據 ---
 market_data = load_and_merge_data()
 
 # --- RAG 核心邏輯 ---
 def get_llm_chain(prompt_template):
-    """初始化並回傳一個 LangChain LLMChain。"""
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest",
-                                 temperature=0.2,
-                                 model_kwargs={"response_format": {"type": "json_object"}})
+    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.2, model_kwargs={"response_format": {"type": "json_object"}})
     prompt = PromptTemplate.from_template(prompt_template)
-    chain = LLMChain(llm=model, prompt=prompt)
-    return chain
+    return LLMChain(llm=model, prompt=prompt)
 
 def _clean_and_parse_json(raw_text: str):
-    """清理並解析 LLM 原始輸出中的 JSON 字串。"""
     match = re.search(r"```(json)?\s*({.*?})\s*```", raw_text, re.DOTALL)
-    if match:
-        clean_text = match.group(2)
-    else:
-        start_index = raw_text.find('{')
-        end_index = raw_text.rfind('}')
-        if start_index != -1 and end_index != -1 and end_index > start_index:
-            clean_text = raw_text[start_index:end_index+1]
-        else:
-            clean_text = raw_text
+    clean_text = match.group(2) if match else raw_text[raw_text.find('{'):raw_text.rfind('}')+1]
     try:
         return json.loads(clean_text)
     except json.JSONDecodeError as e:
@@ -76,97 +62,95 @@ def _clean_and_parse_json(raw_text: str):
         st.code(raw_text, language="text")
         raise e
 
-# --- 報告生成與可視化 ---
+# --- 報告生成 ---
 def generate_portfolio(portfolio_type, risk_profile, investment_amount):
-    """[yfinance 版] 根據本地數據庫篩選結果生成投資報告"""
-
     if portfolio_type in ["純個股", "混合型"]:
-        # --- 步驟 1: 從已載入的 market_data 中進行篩選 ---
         with st.spinner("步驟 1/2: 正在從本地資料庫進行量化篩選..."):
             if market_data.empty:
-                st.error("市場數據為空，無法進行篩選。請先執行 'update_database.py'。")
+                st.error("市場數據為空，無法進行篩選。")
                 return None
-            
             candidate_df = screen_stocks(market_data, risk_profile)
-            
             if candidate_df.empty:
-                st.warning(f"根據您的 '{risk_profile}' 規則，在目前的市場數據中找不到滿足所有條件的股票。請嘗試更換風險偏好或等待明日數據更新。")
+                st.warning(f"根據您的 '{risk_profile}' 規則，找不到滿足所有條件的股票。")
                 return None
-            
-            # [新] 準備給 LLM 的 CSV 字串 (使用 yfinance 的欄位)
             csv_columns = ['stock_id', 'stock_name', 'industry_category', 'pe_ratio', 'pb_ratio', 'yield', 'close_price', 'Positive', 'Negative', 'headline']
             candidate_data_for_llm = candidate_df[csv_columns].to_csv(index=False)
 
-        # --- 步驟 2: 將結果交給 AI 分析 ---
         with st.spinner("步驟 2/2: 已完成量化篩選！正在將候選名單交由 AI 進行最終質化分析..."):
             prompt_templates = get_data_driven_prompt_templates()
-            prompt_template = prompt_templates[portfolio_type]
-            chain = get_llm_chain(prompt_template)
-            
+            chain = get_llm_chain(prompt_templates[portfolio_type])
             input_data = {
-                "stock_rules": STOCK_PROMPT_FRAMEWORK,
-                "etf_rules": ETF_PROMPT_FRAMEWORK,
-                "risk_profile": risk_profile,
-                "investment_amount": f"{investment_amount:,.0f}",
+                "stock_rules": STOCK_PROMPT_FRAMEWORK, "etf_rules": ETF_PROMPT_FRAMEWORK,
+                "risk_profile": risk_profile, "investment_amount": f"{investment_amount:,.0f}",
                 "current_date": datetime.now().strftime("%Y年%m月%d日"),
                 "candidate_stocks_csv": candidate_data_for_llm
             }
             response = chain.invoke(input_data)
             return _clean_and_parse_json(response['text'])
-
-    else: # 純 ETF 流程 (不變)
+    else:
         with st.spinner("正在為您建構純 ETF 投資組合..."):
             prompt_templates = get_data_driven_prompt_templates()
-            prompt_template = prompt_templates[portfolio_type]
-            chain = get_llm_chain(prompt_template)
+            chain = get_llm_chain(prompt_templates[portfolio_type])
             input_data = {
-                "etf_rules": ETF_PROMPT_FRAMEWORK,
-                "risk_profile": risk_profile,
+                "etf_rules": ETF_PROMPT_FRAMEWORK, "risk_profile": risk_profile,
                 "investment_amount": f"{investment_amount:,.0f}",
                 "current_date": datetime.now().strftime("%Y年%m月%d日")
             }
             response = chain.invoke(input_data)
             return _clean_and_parse_json(response['text'])
 
-def display_report(report_data, investment_amount):
-    """以圖文並茂的方式呈現報告"""
-    
+# --- [最終優化版] 報告可視化 ---
+def display_report(report_data, investment_amount, portfolio_type):
+    # [解決方案] 產業中英對照表
+    INDUSTRY_MAP = {
+        'Semiconductors': '半導體', 'Computer Hardware': '電腦硬體',
+        'Financial Services': '金融服務', 'Conglomerates': '綜合企業',
+        'Shipping & Ports': '航運與港口', 'Telecom Services': '電信服務',
+        # ...可持續擴充...
+    }
+
     st.header(report_data['summary']['title'])
     st.info(f"報告生成日期：{report_data['summary']['generated_date']}")
-    
     st.subheader("📈 投資組合總覽")
     st.write(report_data['summary']['overview'])
     
     st.subheader("📊 核心風險指標 (AI 估算)")
     metrics = report_data['portfolio_metrics']
     metric_labels = {'beta': "Beta 值", 'annual_volatility': "年化波動率", 'sharpe_ratio': "夏普比率"}
-    
-    metrics_to_display = {k: v for k, v in metrics.items() if k in metric_labels}
-    
-    cols = st.columns(len(metrics_to_display))
-    for i, (key, value) in enumerate(metrics_to_display.items()):
-        label = metric_labels.get(key, key)
-        cols[i].metric(label, value)
+    cols = st.columns(len(metrics))
+    for i, (key, value) in enumerate(metrics.items()):
+        cols[i].metric(metric_labels.get(key, key), value)
 
     st.write("---")
 
+    # --- 數據準備與清洗 (核心) ---
     if 'core_holdings' in report_data:
         core_df = pd.DataFrame(report_data['core_holdings'])
         sat_df = pd.DataFrame(report_data['satellite_holdings'])
+        # [解決方案] 為混合型增加資產類別欄位
+        core_df['asset_class'] = '核心部位 (ETF)'
+        sat_df['asset_class'] = '衛星部位 (個股)'
         df = pd.concat([core_df, sat_df], ignore_index=True)
-        st.subheader("視覺化分析：整體資產配置")
     else:
         df = pd.DataFrame(report_data['holdings'])
-        st.subheader("視覺化分析")
 
+    # [解決方案] 過濾權重為 0 或空的標的，並重新計算權重
     df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
-    df.dropna(subset=['weight'], inplace=True)
-    if not df.empty and df['weight'].sum() > 0:
+    df = df[df['weight'] > 0].copy()
+    if not df.empty:
         df['weight'] = df['weight'] / df['weight'].sum()
+    else:
+        st.warning("AI 生成的投資組合中沒有有效的持股。")
+        return
 
-    df['資金分配 (TWD)'] = (df['weight'] * investment_amount).round(0)
+    df['資金分配 (TWD)'] = (df['weight'] * investment_amount).astype(int)
     df['權重 (%)'] = (df['weight'] * 100).round(2)
-    
+    # [解決方案] 轉換產業名稱為中文
+    if 'industry' in df.columns:
+        df['industry_zh'] = df['industry'].map(INDUSTRY_MAP).fillna(df['industry'])
+
+    # --- 圖表繪製 ---
+    st.subheader("視覺化分析")
     chart1, chart2 = st.columns(2)
 
     with chart1:
@@ -179,25 +163,39 @@ def display_report(report_data, investment_amount):
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with chart2:
-        group_col, chart_title = (None, None)
-        if 'industry' in df.columns and df['industry'].notna().any():
-            group_col, chart_title = ('industry', '產業權重分佈')
-        elif 'etf_type' in df.columns and df['etf_type'].notna().any():
-            group_col, chart_title = ('etf_type', 'ETF 類型分佈')
+        # [解決方案] 根據投資組合類型，動態決定長條圖內容
+        if portfolio_type == "混合型":
+            grouped = df.groupby('asset_class')['weight'].sum().reset_index()
+            chart_title, x_col = '核心-衛星資產分佈', 'asset_class'
+        elif 'industry_zh' in df.columns:
+            grouped = df.groupby('industry_zh')['weight'].sum().reset_index()
+            chart_title, x_col = '產業權重分佈 (中文)', 'industry_zh'
+        elif 'etf_type' in df.columns:
+            grouped = df.groupby('etf_type')['weight'].sum().reset_index()
+            chart_title, x_col = 'ETF 類型分佈', 'etf_type'
+        else:
+            grouped = None
 
-        if group_col:
-            grouped = df.groupby(group_col)['weight'].sum().reset_index()
-            fig_bar = go.Figure(data=[go.Bar(x=grouped[group_col], y=grouped['weight'], text=(grouped['weight']*100).apply(lambda x: f'{x:.1f}%'), textposition='auto')])
-            fig_bar.update_layout(title_text=chart_title, xaxis_title=None, yaxis_title="權重", yaxis_tickformat='.0%', margin=dict(l=0, r=0, t=40, b=0))
+        if grouped is not None:
+            fig_bar = go.Figure(data=[go.Bar(
+                x=grouped[x_col], y=grouped['weight'],
+                text=(grouped['weight']*100).apply(lambda x: f'{x:.1f}%'), textposition='auto'
+            )])
+            fig_bar.update_layout(title_text=chart_title, xaxis_title=None, yaxis_title="權重",
+                                  yaxis_tickformat='.0%', margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig_bar, use_container_width=True)
 
+    # --- 詳細表格 ---
     st.write("---")
     st.subheader("📝 詳細持股與資金計畫")
     display_cols = ['ticker', 'name']
-    if 'industry' in df.columns and df['industry'].notna().any(): display_cols.append('industry')
-    if 'etf_type' in df.columns and df['etf_type'].notna().any(): display_cols.append('etf_type')
+    if 'industry_zh' in df.columns: display_cols.append('industry_zh')
+    if 'etf_type' in df.columns: display_cols.append('etf_type')
     display_cols.extend(['權重 (%)', '資金分配 (TWD)', 'rationale'])
-    final_cols = [col for col in display_cols if col in df.columns]
+    
+    # 使用中文產業欄位
+    df.rename(columns={'industry_zh': '產業類別'}, inplace=True)
+    final_cols = [col for col in display_cols if col in df.columns or col == '產業類別']
 
     st.dataframe(df[final_cols], use_container_width=True, hide_index=True,
         column_config={
@@ -207,7 +205,6 @@ def display_report(report_data, investment_amount):
         })
 
 def handle_follow_up_question(question, context):
-    """處理後續問題"""
     prompt_template = """
     你是一位專業的台灣股市投資組合經理。使用者已經收到你先前建立的投資組合報告，現在他有後續問題。
     請根據你先前提供的報告內容，以及使用者的問題，提供簡潔、專業的回答。
@@ -244,7 +241,6 @@ with st.sidebar:
 
     st.info("免責聲明：本系統僅為AI輔助分析工具，所有建議僅供參考，不構成任何投資決策之依據。")
 
-
 if analyze_button:
     st.session_state.messages = []
     st.session_state.report_data = None
@@ -258,8 +254,10 @@ if analyze_button:
         st.session_state.report_data = report
         st.session_state.portfolio_generated = True
 
-if st.session_state.portfolio_generated:
-    display_report(st.session_state.report_data, investment_amount_input)
+if st.session_state.portfolio_generated and st.session_state.report_data:
+    # 傳入 portfolio_type_input 以便函式內部判斷
+    display_report(st.session_state.report_data, investment_amount_input, portfolio_type_input)
+    
     st.write("---")
     st.subheader("💬 提問與互動調整")
     
