@@ -8,6 +8,9 @@ import plotly.graph_objects as go
 import json
 from datetime import datetime
 import re
+import os
+import time
+from update_database import main as run_db_update
 
 # --- 導入新的專案模組 (FinMind 架構) ---
 from etf_rules import ETF_PROMPT_FRAMEWORK
@@ -27,6 +30,23 @@ try:
 except (KeyError, Exception) as e:
     st.error("錯誤：請確認你的 Google API 金鑰已在 Streamlit Secrets 中正確設定。")
     st.info("若在本機端開發，請建立 `.streamlit/secrets.toml` 檔案並設定金鑰。")
+    st.stop()
+
+# --- [新] 資料庫存在性檢查與引導建立 ---
+DB_PATH = "tw_stock_data.db"
+if not os.path.exists(DB_PATH):
+    st.warning(f"警告：找不到本地資料庫檔案 '{DB_PATH}'。")
+    st.info("這可能是您首次執行本應用程式。請點擊下方按鈕來下載最新的市場數據並建立本地資料庫。")
+    st.markdown("> **注意**：此過程需要幾分鐘時間，具體取決於您的網路速度。執行期間，您可以在執行此程式的終端機/控制台中查看詳細進度。")
+    
+    if st.button("建立 / 更新本地市場資料庫", type="primary", use_container_width=True):
+        with st.spinner("正在執行數據庫更新程序，請稍候..."):
+            run_db_update()
+        st.success("資料庫建立成功！應用程式將在 3 秒後自動重新載入。")
+        time.sleep(3)
+        st.rerun()
+    
+    # 在資料庫建立完成前，停止執行後續的程式碼
     st.stop()
     
 # --- 應用程式啟動時，一次性載入所有市場數據 ---
@@ -256,4 +276,5 @@ if st.session_state.portfolio_generated:
 
 elif not market_data.empty:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊按鈕開始分析。")
+
 
