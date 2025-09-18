@@ -198,14 +198,27 @@ def display_report(report_data, investment_amount, portfolio_type):
             df['industry_zh'] = 'N/A' # 給個預設值以防萬一
 
         if portfolio_type == "混合型":
-            # 建立一個新欄位 'chart_category'
-            # 判斷 'etf_type' 欄位是否存在且不為空，是的話就標記為 'ETF 核心'
-            df['chart_category'] = np.where(df.get('etf_type', pd.NA).notna(), 'ETF 核心', df['industry_zh'])
+            # 【V3.1 Bug 修復】修正 'etf_type' 欄位不存在時的錯誤
+            if 'etf_type' in df.columns:
+                # 建立一個新欄位 'chart_category'
+                # 判斷 'etf_type' 欄位是否存在且不為空，是的話就標記為 'ETF 核心'
+                df['chart_category'] = np.where(df['etf_type'].notna(), 'ETF 核心', df['industry_zh'])
+            else:
+                # 如果沒有 etf_type 欄位，代表全都是個股
+                df['chart_category'] = df['industry_zh']
+
             grouped = df.groupby('chart_category')['weight_normalized'].sum().reset_index()
             chart_title, x_col = '資產類別分佈 (混合型)', 'chart_category'
         else:
             # 純個股或純 ETF 的邏輯
-            group_col = 'industry_zh' if 'industry_zh' in df.columns and df['industry_zh'].nunique() > 1 else 'etf_type'
+            # 修正：確保 group_col 在 df 中存在
+            if 'industry_zh' in df.columns and df['industry_zh'].nunique() > 1:
+                group_col = 'industry_zh'
+            elif 'etf_type' in df.columns:
+                group_col = 'etf_type'
+            else:
+                group_col = 'name' # 最後的保險手段，按名稱分組
+            
             grouped = df.groupby(group_col)['weight_normalized'].sum().reset_index()
             chart_title, x_col = f'{group_col} 權重分佈', group_col
 
@@ -303,3 +316,4 @@ if st.session_state.portfolio_generated and st.session_state.report_data:
 
 elif not market_data.empty:
     st.info("請在左側側邊欄設定您的投資偏好與資金，然後點擊「生成投資組合」按鈕開始分析。")
+
