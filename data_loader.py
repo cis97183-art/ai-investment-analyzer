@@ -14,6 +14,9 @@ def clean_numeric_column(series: pd.Series) -> pd.Series:
 
 def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """標準化欄位名稱，移除特殊字元並統一命名"""
+    # [修正] 關鍵修復：在重新命名前，先強制清除所有欄位名稱的前後空白字元
+    df.columns = df.columns.str.strip()
+    
     # 創建一個標準化映射
     rename_map = {
         '代號': 'stock_id',
@@ -37,7 +40,7 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
         '僑外投資持股(%)': 'foreign_holding_pct',
         '本國法人持股(%)': 'local_corp_holding_pct',
         '最新近4Q每股自由金流(元)': 'fcf_per_share_4q',
-        '代碼.x': 'stock_id',
+        '代碼.y': 'stock_id', 
         '三年.σ年.': 'std_dev_3y',
         '五年.σ年.': 'std_dev_5y',
         '市價': 'close_price',
@@ -66,7 +69,6 @@ def load_all_data_from_csvs():
 
     try:
         # --- 載入個股數據 (上市 + 上櫃) ---
-        # [修正] 指定 encoding='cp950' 並加入 encoding_errors='ignore' 來處理檔案中可能存在的無效字元
         listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
         otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
@@ -87,7 +89,6 @@ def load_all_data_from_csvs():
             stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
         # --- 載入 ETF 數據 ---
-        # 由於檔名是 .xlsx，我們使用 read_excel，它通常能更好地自動處理編碼
         etfs_df = pd.read_excel(ETF_PATH)
         etfs_df = standardize_column_names(etfs_df)
         
@@ -98,19 +99,20 @@ def load_all_data_from_csvs():
         ]
         for col in numeric_cols_etf:
             if col in etfs_df.columns:
-                 # `yield` 欄位可能在 ETF 數據中也叫 `成交價現金殖利率`
-                if col == 'yield' and '成交價現金殖利率' in etfs_df.columns:
+                 if col == 'yield' and '成交價現金殖利率' in etfs_df.columns:
                      etfs_df[col] = clean_numeric_column(etfs_df['成交價現金殖利率'])
-                else:
+                 else:
                     etfs_df[col] = clean_numeric_column(etfs_df[col])
 
         # 將 stock_id 轉換為字串
         if 'stock_id' in etfs_df.columns:
             etfs_df['stock_id'] = etfs_df['stock_id'].astype(str)
         
-        # 移除完全重複的資料
-        stocks_df.drop_duplicates(subset=['stock_id'], inplace=True)
-        etfs_df.drop_duplicates(subset=['stock_id'], inplace=True)
+        # 移除完全重複的資料 (在確認 stock_id 存在後才執行)
+        if 'stock_id' in stocks_df.columns:
+            stocks_df.drop_duplicates(subset=['stock_id'], inplace=True)
+        if 'stock_id' in etfs_df.columns:
+            etfs_df.drop_duplicates(subset=['stock_id'], inplace=True)
 
         return stocks_df, etfs_df
 
