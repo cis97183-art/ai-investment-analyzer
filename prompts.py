@@ -1,93 +1,184 @@
-# --- AI Prompt 框架 (個股規則) ---
-STOCK_PROMPT_FRAMEWORK = """
-### 台股投資組合風險偏好定義規則 V4 (yfinance 數據版)
-| 規則維度 (Rule Dimension) | 保守型 (Conservative) | 穩健型 (Balanced) | 積極型 (Aggressive) |
-|---|---|---|---|
-| **1. 主要投資目標** | 資本保值，追求穩定股利現金流與絕對報酬。 | 追求資本長期溫和增值，兼顧風險控制。 | 追求資本最大化增長，願意承受較大波動以換取高額回報。 |
-| **2. 估值考量 (Valuation)** | 優先選擇本益比(pe_ratio) < 20 且股價淨值比(pb_ratio) < 2 的公司。 | 選擇估值合理的公司 (pe_ratio < 25, pb_ratio < 4)。 | 可接受較高估值，但需有相應的成長潛力支撐。 |
-| **3. 財務品質** | 高殖利率 (`yield` > 3%)、低負債 (隱含於低 P/B)。 | 兼具穩定盈利 (`yield` > 1.5%) 與營收成長潛力。 | 專注於高營收增長、高毛利的公司 (由產業類別判斷)。 |
-| **4. 產業風格** | 側重防禦型、成熟型產業 (金融、傳產、必需消費)。 | 均衡配置核心電子股與傳產龍頭股。 | 側重高成長電子股 (半導體、AI、IC設計)。 |
-| **5. 新聞情緒** | 避開近期有顯著負面新聞 (headline) 的公司。 | 綜合考量，可容忍中性新聞。 | 將正面新聞 (headline) 視為一個加分項。 |
-"""
+from langchain.prompts import PromptTemplate
+from portfolio_rules import PORTFOLIO_CONSTRUCTION_RULES
 
 def get_data_driven_prompt_templates():
-    """返回一個包含所有投資組合提示語模板的字典。"""
-    
-    templates = {
-        "純個股": """
-        你是一位專業的台灣股市投資組合經理。請根據「台股投資組合風險偏好定義規則 V4 (yfinance 數據版)」以及使用者資訊，為他量身打造一個純台股的投資組合。
-        **任務**: 從下方提供的「候選股票清單」中，挑選 5 到 8 支最符合 '{risk_profile}' 規則的台股，分配權重，並以指定的 JSON 格式回傳。
-        **規則**: \n{stock_rules}
-        
-        **候選股票清單 (CSV格式)**:
-        這是從本地資料庫篩選出的高品質候選名單，你**必須**從中挑選股票來建立投資組合。欄位包含: stock_id, stock_name, industry_category, pe_ratio, pb_ratio, yield, close_price, Positive, Negative, headline。
-        \n{candidate_stocks_csv}
+    """
+    根據使用者選擇的投資組合類型，返回對應的LangChain PromptTemplate。
+    """
 
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
-        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【純個股】投資組合", "overview": "這是一個根據您的風險偏好，並從量化篩選後的優質名單中挑選出來的投資組合，旨在實現您的投資目標。", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個基於所選股票產業性質的估計數字，例如 1.1>", 
-              "annual_volatility": "<一個基於風險偏好的估計百分比字串，例如 '18%'>", 
-              "sharpe_ratio": "<一個基於風險偏好的估計數字，例如 0.7>"
-          }},
-          "holdings": [
-            {{"ticker": "<股票代碼，例如 2330>", "name": "<公司簡稱>", "industry": "<產業類別>", "weight": 0.25, "rationale": "<簡述選擇此股票的原因，需結合估值或新聞情緒。>"}}
-          ]
-        }}
-        """,
-        "純 ETF": """
-        你是一位專業的台灣 ETF 投資組合經理。請根據「台股 ETF 篩選規則 V3 (實務強化版)」以及使用者資訊，為他量身打造一個純台股 ETF 的投資組合。
-        **任務**: 挑選 3 到 5 支符合 '{risk_profile}' 規則的台股 ETF，分配權重，並以指定的 JSON 格式回傳。
-        **規則**: \n{etf_rules}
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
-        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【純 ETF】投資組合", "overview": "此 ETF 組合依據您的穩健型偏好，結合市值型與高成長主題 ETF，目標在於平衡市場風險並捕捉長期增長機會。", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個數字，例如 0.9>", 
-              "annual_volatility": "<一個百分比字串，例如 '15%'>", 
-              "sharpe_ratio": "<一個數字，例如 0.8>"
-          }},
-          "holdings": [
-            {{"ticker": "0050", "name": "元大台灣50", "etf_type": "市值型", "weight": 0.4, "rationale": "追蹤台灣市值最大的50家公司，提供穩健的市場基本報酬，是資產配置的核心。"}},
-            {{"ticker": "00878", "name": "國泰永續高股息", "etf_type": "高股息/ESG", "weight": 0.3, "rationale": "結合高股息與 ESG 篩選，提供穩定的現金流，同時降低波動性。"}}
-          ]
-        }}
-        """,
-        "混合型": """
-        你是一位專業的台灣資產配置專家。請採用「核心-衛星」策略，為使用者建立一個混合型投資組合。
-        **任務**:
-        1. **核心部位**: 根據「台股 ETF 篩選規則 V3」，為 '{risk_profile}' 風險偏好挑選 1-2 支 ETF。
-        2. **衛星部位**: 從下方提供的「候選股票清單」中，為 '{risk_profile}' 風險偏好挑選 3-5 支個股。
-        3. **格式化輸出**: 將結果以指定的 JSON 格式回傳，並根據風險偏好調整核心與衛星的資金比例。
-        
-        **個股規則**: \n{stock_rules}
-        **ETF 規則**: \n{etf_rules}
+    # --- 1. 純個股投資組合 Prompt ---
+    prompt_pure_stock = PromptTemplate(
+        input_variables=["risk_profile", "investment_amount", "candidate_stocks_csv"],
+        template="""
+        # 指令: 擔任資深投資總監
 
-        **候選股票清單 (CSV格式)**:
-        這是從本地資料庫篩選出的高品質候選名單，你的衛星部位**必須**從中挑選股票來建立。欄位包含: stock_id, stock_name, industry_category, pe_ratio, pb_ratio, yield, close_price, Positive, Negative, headline。
-        \n{candidate_stocks_csv}
+        你是一位專為高淨值客戶服務的資深投資總監。你的任務是根據下方提供的「投資組合建構規則」和「候選股票清單」，為客戶建構一個專業的「純個股投資組合」。
 
-        **使用者資訊**: 風險偏好: {risk_profile}, 投入資金: {investment_amount}
+        ## 核心任務
+        1.  **理解規則**: 深度分析「投資組合建構規則」中，針對 '{risk_profile}' 風險偏好的「純個股投資組合」策略。
+        2.  **篩選標的**: 從下方提供的「候選股票清單」中，根據規則挑選出最符合策略的股票。
+        3.  **配置權重**: 根據規則建議的持股數量與分散原則，為選出的股票分配具體的投資權重。
+        4.  **撰寫報告**: 產生一份專業的投資建議報告，包含投資組合概述、標的選擇理由、以及配置細節。
+        5.  **格式化輸出**: 將最終結果以指定的 JSON 格式回傳。
+
+        ---
+        ## 參考資料
+
+        ### 1. 投資組合建構規則
+        {rules}
+
+        ### 2. 候選股票清單 (已通過第一輪量化篩選)
+        {candidate_stocks_csv}
+
+        ---
+        ## 輸出指令
+
+        **客戶資訊**:
+        -   **風險偏好**: {risk_profile}
+        -   **投入資金**: {investment_amount} 新台幣
+
         **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
-        **核心/衛星比例指引**: 保守型 (核心80%/衛星20%), 穩健型 (核心60%/衛星40%), 積極型 (核心40%/衛星60%)。
+        ```json
         {{
-          "summary": {{"title": "為{risk_profile}投資者設計的【核心-衛星混合型】投資組合", "overview": "採用核心-衛星策略，以穩健的 ETF 為核心，搭配從優質名單中篩選出的高成長潛力個股作為衛星，旨在兼顧穩定性與資本增值潛力。", "generated_date": "{current_date}"}},
-          "portfolio_metrics": {{
-              "beta": "<一個基於整體配置的估計數字，例如 1.0>", 
-              "annual_volatility": "<一個基於整體配置的估計百分比字串，例如 '17%'>", 
-              "sharpe_ratio": "<一個基於整體配置的估計數字，例如 0.75>"
+          "summary": {{
+            "title": "為「{risk_profile}」投資者設計的【純個股】投資組合",
+            "overview": "這是一個根據您的風險偏好量身打造的個股投資組合。我們專注於[此處填寫核心邏輯，例如：經營穩健、具長期股利發放紀錄的大型龍頭企業]，旨在實現[此處填寫投資目標，例如：資本保值與穩定現金流]。"
           }},
-          "core_holdings": [
-            {{"ticker": "006208", "name": "富邦台50", "weight": 0.6, "rationale": "作為投資組合的核心，追蹤台灣整體市場表現，提供基礎的穩定回報。"}}
-          ],
-          "satellite_holdings": [
-            {{"ticker": "2330", "name": "台積電", "weight": 0.15, "rationale": "全球半導體領導者，為衛星部位中追求成長的基石。"}}
-          ]
+          "portfolio_composition": {{
+            "type": "純個股",
+            "holdings": [
+              {{
+                "stock_id": "股票代號",
+                "stock_name": "公司名稱",
+                "industry": "產業別",
+                "weight": 0.25,
+                "reason": "選擇此標的的核心理由（必須根據規則和數據說明，例如：Beta值小於0.8，連續配息超過15年，殖利率高於4%，符合保守型策略的穩定收益要求）。"
+              }}
+            ]
+          }}
         }}
+        ```
         """
-    }
-    return templates
+    ).partial(rules=PORTFOLIO_CONSTRUCTION_RULES)
 
+
+    # --- 2. 純ETF投資組合 Prompt ---
+    prompt_pure_etf = PromptTemplate(
+        input_variables=["risk_profile", "investment_amount", "candidate_etfs_csv"],
+        template="""
+        # 指令: 擔任資深投資總監
+
+        你是一位專為高淨值客戶服務的資深投資總監。你的任務是根據下方提供的「投資組合建構規則」和「候選ETF清單」，為客戶建構一個專業的「純ETF投資組合」。
+
+        ## 核心任務
+        1.  **理解規則**: 深度分析「投資組合建構規則」中，針對 '{risk_profile}' 風險偏好的「純ETF投資組合」策略。
+        2.  **篩選標的**: 從下方提供的「候選ETF清單」中，根據規則挑選出最符合策略的ETF。
+        3.  **配置權重**: 根據規則建議的資產配置原則（例如：債券80%/高股息20%），為選出的ETF分配具體的投資權重。
+        4.  **撰寫報告**: 產生一份專業的投資建議報告，包含投資組合概述、標的選擇理由、以及配置細節。
+        5.  **格式化輸出**: 將最終結果以指定的 JSON 格式回傳。
+
+        ---
+        ## 參考資料
+
+        ### 1. 投資組合建構規則
+        {rules}
+
+        ### 2. 候選ETF清單 (已通過第一輪量化篩選)
+        {candidate_etfs_csv}
+
+        ---
+        ## 輸出指令
+
+        **客戶資訊**:
+        -   **風險偏好**: {risk_profile}
+        -   **投入資金**: {investment_amount} 新台幣
+
+        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
+        ```json
+        {{
+          "summary": {{
+            "title": "為「{risk_profile}」投資者設計的【純ETF】投資組合",
+            "overview": "這是一個根據您的風險偏好量身打造的ETF投資組合。我們專注於[此處填寫核心邏輯，例如：透過投資級債券ETF建立穩固的收益基礎]，旨在實現[此處填寫投資目標，例如：資本保護與追求穩定現金流]。"
+          }},
+          "portfolio_composition": {{
+            "type": "純ETF",
+            "holdings": [
+              {{
+                "stock_id": "ETF代號",
+                "stock_name": "ETF名稱",
+                "industry": "ETF類型",
+                "weight": 0.80,
+                "reason": "選擇此標的的核心理由（必須根據規則和數據說明，例如：此為長天期美國公債ETF，Beta值低於0.5，費用率小於0.5%，完美符合保守型策略的核心配置需求）。"
+              }}
+            ]
+          }}
+        }}
+        ```
+        """
+    ).partial(rules=PORTFOLIO_CONSTRUCTION_RULES)
+
+
+    # --- 3. 混合型投資組合 Prompt ---
+    prompt_hybrid = PromptTemplate(
+        input_variables=["risk_profile", "investment_amount", "candidate_stocks_csv", "candidate_etfs_csv"],
+        template="""
+        # 指令: 擔任資深投資總監
+
+        你是一位專為高淨值客戶服務的資深投資總監。你的任務是根據下方提供的「投資組合建構規則」和「候選清單」，為客戶建構一個專業的「混合型投資組合」。
+
+        ## 核心任務
+        1.  **理解規則**: 深度分析「投資組合建構規則」中，針對 '{risk_profile}' 風險偏好的「混合型投資組合」策略，特別注意個股與ETF的配置比例。
+        2.  **篩選標的**: 從「候選個股清單」和「候選ETF清單」中，分別根據規則挑選出最符合策略的標的。
+        3.  **配置權重**: 嚴格遵循規則建議的資產配置比例（例如：保守型為70%債券ETF+30%個股），為選出的所有標的分配總和為100%的投資權重。
+        4.  **撰寫報告**: 產生一份專業的投資建議報告，包含投資組合概述、標的選擇理由、以及配置細節。
+        5.  **格式化輸出**: 將最終結果以指定的 JSON 格式回傳。
+
+        ---
+        ## 參考資料
+
+        ### 1. 投資組合建構規則
+        {rules}
+
+        ### 2. 候選個股清單 (已通過第一輪量化篩選)
+        {candidate_stocks_csv}
+
+        ### 3. 候選ETF清單 (已通過第一輪量化篩選)
+        {candidate_etfs_csv}
+
+        ---
+        ## 輸出指令
+
+        **客戶資訊**:
+        -   **風險偏好**: {risk_profile}
+        -   **投入資金**: {investment_amount} 新台幣
+
+        **你的輸出必須是純粹的 JSON 格式，直接以 '{{' 開始，以 '}}' 結束。結構如下:**
+        ```json
+        {{
+          "summary": {{
+            "title": "為「{risk_profile}」投資者設計的【混合型】投資組合",
+            "overview": "這是一個根據您的風險偏好量身打造的混合型投資組合。我們採用[此處填寫核心邏輯，例如：以債券ETF作為穩定基石，搭配少量優質龍頭股增強長期收益]，旨在實現[此處填寫投資目標，例如：在嚴格控制風險的同時，參與股市的長期增長潛力]。"
+          }},
+          "portfolio_composition": {{
+            "type": "混合型",
+            "holdings": [
+              {{
+                "stock_id": "標的代號",
+                "stock_name": "標的名稱",
+                "industry": "產業別或ETF類型",
+                "weight": 0.70,
+                "reason": "選擇此標的的核心理由（必須根據規則和數據說明，說明為何選擇此ETF或個股）。"
+              }}
+            ]
+          }}
+        }}
+        ```
+        """
+    ).partial(rules=PORTFOLIO_CONSTRUCTION_RULES)
+
+
+    return {
+        "純個股投資組合": prompt_pure_stock,
+        "純ETF投資組合": prompt_pure_etf,
+        "混合型投資組合": prompt_hybrid
+    }

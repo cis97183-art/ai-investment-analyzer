@@ -1,50 +1,121 @@
 import pandas as pd
-import sqlite3
 import streamlit as st
 import os
 
-DB_PATH = "tw_stock_data.db"
+# --- 常數設定 ---
+LISTED_STOCKS_PATH = 'listed stock. without etfcsv.csv'
+OTC_STOCKS_PATH = 'OTC without etf.csv'
+ETF_PATH = 'ETFALL.xlsx'
 
+# --- 核心數據清理與轉換函數 ---
+def clean_numeric_column(series: pd.Series) -> pd.Series:
+    """將欄位轉換為數值型態，並處理無效值"""
+    return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce')
+
+def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """標準化欄位名稱，移除特殊字元並統一命名"""
+    # 創建一個標準化映射
+    rename_map = {
+        '代號': 'stock_id',
+        '名稱': 'stock_name',
+        '市場': 'market',
+        '產業別': 'industry_category',
+        '一年(β)': 'beta',
+        '一年.β.': 'beta',
+        '市值(億)': 'market_cap_billions',
+        '市值.億.': 'market_cap_billions',
+        '成立年數': 'years_since_listing',
+        '近3年平均ROE(%)': 'roe_avg_3y',
+        '近3年加權平均ROE(%)': 'roe_wavg_3y',
+        '最新單季ROE(%)': 'roe_latest_q',
+        'PER': 'pe_ratio',
+        '累月營收年增(%)': 'acc_rev_yoy',
+        '最新季度負債總額佔比(%)': 'debt_ratio',
+        '現金股利連配次數': 'dividend_consecutive_years',
+        '成交價現金殖利率': 'yield',
+        '一年(σ年)': 'std_dev_1y',
+        '僑外投資持股(%)': 'foreign_holding_pct',
+        '本國法人持股(%)': 'local_corp_holding_pct',
+        '最新近4Q每股自由金流(元)': 'fcf_per_share_4q',
+        '代碼.x': 'stock_id',
+        '三年.σ年.': 'std_dev_3y',
+        '五年.σ年.': 'std_dev_5y',
+        '市價': 'close_price',
+        '資產規模.億.': 'asset_size_billions',
+        '近四季殖利率': 'yield_4q',
+        '年報酬率.含息.': 'annual_return_incl_div',
+        '內扣費用.保管.管理.': 'expense_ratio',
+        '受益人數': 'num_of_beneficiaries',
+        '成立年齡': 'etf_age'
+    }
+    
+    # 只重新命名存在的欄位
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    return df
+
+# --- 數據載入與快取 ---
 @st.cache_data(ttl=3600) # 快取數據一小時
-def load_and_merge_data():
+def load_all_data_from_csvs():
     """
-    [yfinance 版] 從本地 SQLite 資料庫讀取財務數據和新聞情緒數據，然後將它們融合在一起。
+    從三個指定的CSV檔案載入、清理、標準化並合併上市櫃公司與ETF的數據。
+    返回兩個獨立的DataFrame: 一個給個股，一個給ETF。
     """
-    if not os.path.exists(DB_PATH):
-        st.error(f"錯誤：找不到資料庫檔案 '{DB_PATH}'。請先執行 'update_database.py' 來生成資料庫。")
-        return pd.DataFrame()
-        
+    if not all(os.path.exists(p) for p in [LISTED_STOCKS_PATH, OTC_STOCKS_PATH, ETF_PATH]):
+        st.error("錯誤：缺少必要的數據檔案 (上市、上櫃或ETF CSV)。請確保檔案都存在於專案目錄中。")
+        return pd.DataFrame(), pd.DataFrame()
+
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            # 讀取最新的財務數據快照
-            financial_df = pd.read_sql("SELECT * FROM daily_metrics", conn)
-            # 讀取新聞情緒數據
-            news_df = pd.read_sql("SELECT stock_id, headline, sentiment_category FROM news_sentiment", conn)
+        # --- 載入個股數據 (上市 + 上櫃) ---
+        listed_df = pd.read_csv(LISTED_STOCKS_PATH)
+        otc_df = pd.read_csv(OTC_STOCKS_PATH)
+        stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
+        stocks_df = standardize_column_names(stocks_df)
         
-        if financial_df.empty:
-            st.warning("資料庫中的財務數據為空。請先執行 'update_database.py'。")
-            return pd.DataFrame()
-
-        # 數據融合：計算每支股票的正面/負面新聞數量
-        news_summary = news_df.groupby('stock_id')['sentiment_category'].value_counts().unstack(fill_value=0)
-        # 確保 'Positive' 和 'Negative' 欄位存在
-        if 'Positive' not in news_summary: news_summary['Positive'] = 0
-        if 'Negative' not in news_summary: news_summary['Negative'] = 0
+        # 清理與轉換 stocks_df 的欄位
+        numeric_cols_stock = [
+            'beta', 'market_cap_billions', 'roe_avg_3y', 'pe_ratio', 
+            'acc_rev_yoy', 'dividend_consecutive_years', 'yield', 
+            'std_dev_1y', 'fcf_per_share_4q'
+        ]
+        for col in numeric_cols_stock:
+            if col in stocks_df.columns:
+                stocks_df[col] = clean_numeric_column(stocks_df[col])
         
-        # 將新聞統計與財務數據合併
-        merged_df = pd.merge(financial_df, news_summary[['Positive', 'Negative']], on='stock_id', how='left')
-        # 填充沒有新聞的股票
-        merged_df[['Positive', 'Negative']] = merged_df[['Positive', 'Negative']].fillna(0)
+        # 將 stock_id 轉換為字串
+        if 'stock_id' in stocks_df.columns:
+            stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
-        # 將最新的新聞標題附加到每一行，以便後續分析
-        latest_headlines = news_df.groupby('stock_id')['headline'].apply(lambda x: ' | '.join(x)).reset_index()
-        final_df = pd.merge(merged_df, latest_headlines, on='stock_id', how='left')
-        final_df['headline'].fillna("無", inplace=True)
+        # --- 載入 ETF 數據 ---
+        etfs_df = pd.read_csv(ETF_PATH)
+        etfs_df = standardize_column_names(etfs_df)
         
-        st.success(f"成功從 '{DB_PATH}' 載入並融合了 {len(final_df)} 筆最新市場數據。")
-        return final_df
+        # 清理與轉換 etfs_df 的欄位
+        numeric_cols_etf = [
+            'beta', 'std_dev_3y', 'annual_return_incl_div', 
+            'expense_ratio', 'yield'
+        ]
+        for col in numeric_cols_etf:
+            if col in etfs_df.columns:
+                 # `yield` 欄位可能在 ETF 數據中也叫 `成交價現金殖利率`
+                if col == 'yield' and '成交價現金殖利率' in etfs_df.columns:
+                     etfs_df[col] = clean_numeric_column(etfs_df['成交價現金殖利率'])
+                else:
+                    etfs_df[col] = clean_numeric_column(etfs_df[col])
 
+        # 將 stock_id 轉換為字串
+        if 'stock_id' in etfs_df.columns:
+            etfs_df['stock_id'] = etfs_df['stock_id'].astype(str)
+        
+        # 移除完全重複的資料
+        stocks_df.drop_duplicates(subset=['stock_id'], inplace=True)
+        etfs_df.drop_duplicates(subset=['stock_id'], inplace=True)
+
+        return stocks_df, etfs_df
+
+    except FileNotFoundError as e:
+        st.error(f"檔案讀取錯誤: {e}。請確認CSV檔案路徑是否正確。")
+        return pd.DataFrame(), pd.DataFrame()
     except Exception as e:
-        st.error(f"從資料庫讀取或融合數據失敗: {e}")
-        return pd.DataFrame()
+        st.error(f"處理數據時發生預期外的錯誤: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
