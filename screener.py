@@ -3,14 +3,15 @@ import streamlit as st
 
 def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
     """
-    【V2.1 - 品質排序版】根據使用者設定的風險偏好，對個股進行多條件評分與排序。
-    此版本移除了最低符合門檻，改為直接取符合最多條件的前N名，確保恆有產出。
+    【V3.0 - 指標硬篩選版】根據使用者設定的風險偏好，嚴格篩選出滿足所有條件的個股。
+    此版本回歸硬性指標過濾，確保只有100%符合條件的標的才會被選入。
     """
     if stocks_df.empty:
         return pd.DataFrame()
 
     df = stocks_df.copy()
     
+    # 預先處理，確保所有用於篩選的欄位都存在且為數值
     required_cols = {
         'beta': 999, 'market_cap_billions': 0, 'dividend_consecutive_years': 0,
         'yield': 0, 'std_dev_1y': 999, 'roe_avg_3y': -999, 'pe_ratio': 999,
@@ -23,8 +24,8 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
 
     st.write("---")
     
-    rules = {}
-    sort_by_col = '' # 第二排序指標
+    result_df = pd.DataFrame()
+    rules_text = ""
 
     if risk_profile == '保守型':
         rules = {
@@ -35,7 +36,10 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "年化標準差 < 20%": df['std_dev_1y'] < 20,
             "近3年平均ROE > 8%": df['roe_avg_3y'] > 8
         }
-        sort_by_col = 'yield'
+        # 使用 & 符號串聯所有條件
+        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
+        result_df = df[all_conditions].sort_values(by='yield', ascending=False)
+        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
 
     elif risk_profile == '穩健型':
         rules = {
@@ -46,7 +50,9 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "累月營收年增 > 0%": df['acc_rev_yoy'] > 0,
             "近4Q每股自由現金流 > 0元": df['fcf_per_share_4q'] > 0
         }
-        sort_by_col = 'roe_avg_3y'
+        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
+        result_df = df[all_conditions].sort_values(by='roe_avg_3y', ascending=False)
+        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
 
     elif risk_profile == '積極型':
         rules = {
@@ -54,35 +60,27 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "累月營收年增 > 15%": df['acc_rev_yoy'] > 15,
             "近3年加權平均ROE > 15%": df['roe_wavg_3y'] > 15,
         }
-        sort_by_col = 'acc_rev_yoy'
-    
-    if not rules:
-        return pd.DataFrame()
+        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
+        result_df = df[all_conditions].sort_values(by='acc_rev_yoy', ascending=False)
+        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
 
-    # 計算每檔股票符合了幾項條件
-    df['match_count'] = sum(rule.astype(int) for rule in rules.values())
-
-    st.info(f"**篩選邏輯 ({risk_profile}):**\n\n- 依據下列 **{len(rules)}** 項指標進行評分。\n- 產出結果將以**符合項目數量**最多者優先排序。")
-    rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
+    st.info(f"**篩選規則 ({risk_profile}):** 必須**同時滿足**以下所有條件")
     st.markdown(rules_text, unsafe_allow_html=True)
     
-    # 【核心修改】移除 min_matches 過濾條件，改為直接排序
-    # 只取至少符合一項條件的股票，並進行排序
-    result_df = df[df['match_count'] > 0].sort_values(
-        by=['match_count', sort_by_col], ascending=[False, False]
-    ).head(50)
+    st.success(f"篩選完成！共有 {len(result_df)} 檔個股完全符合條件。")
     
-    st.success(f"篩選完成！共有 {len(result_df)} 檔個股進入候選名單。")
-    
+    # 為了保持介面欄位一致性，加入 'match_count' 欄位，值為規則數量
+    if not result_df.empty:
+        result_df['match_count'] = len(rules)
+
     display_cols = [
         'stock_id', 'stock_name', 'industry_category', 'match_count',
         'beta', 'market_cap_billions', 'dividend_consecutive_years', 'yield',
         'std_dev_1y', 'roe_avg_3y', 'pe_ratio', 'acc_rev_yoy', 'fcf_per_share_4q', 'roe_wavg_3y'
     ]
-    # 確保顯示的欄位都存在於 DataFrame 中，避免錯誤
     final_cols = [col for col in display_cols if col in result_df.columns]
     
-    return result_df[final_cols]
+    return result_df[final_cols].head(50) # 最多顯示50檔
 
 
 def screen_etfs(etfs_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
@@ -94,7 +92,6 @@ def screen_etfs(etfs_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
 
     df = etfs_df.copy()
     
-    # 通用篩選：排除槓桿型/反向型ETF
     exclude_keywords = ['正2', '反1', '槓桿', '反向']
     for keyword in exclude_keywords:
         df = df[~df['stock_name'].str.contains(keyword, na=False)]
