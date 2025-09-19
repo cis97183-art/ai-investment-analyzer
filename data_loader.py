@@ -57,17 +57,18 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=3600) # 快取數據一小時
 def load_all_data_from_csvs():
     """
-    從三個指定的CSV檔案載入、清理、標準化並合併上市櫃公司與ETF的數據。
+    從三個指定的檔案載入、清理、標準化並合併上市櫃公司與ETF的數據。
     返回兩個獨立的DataFrame: 一個給個股，一個給ETF。
     """
     if not all(os.path.exists(p) for p in [LISTED_STOCKS_PATH, OTC_STOCKS_PATH, ETF_PATH]):
-        st.error("錯誤：缺少必要的數據檔案 (上市、上櫃或ETF CSV)。請確保檔案都存在於專案目錄中。")
+        st.error("錯誤：缺少必要的數據檔案 (上市、上櫃或ETF)。請確保檔案都存在於專案目錄中。")
         return pd.DataFrame(), pd.DataFrame()
 
     try:
         # --- 載入個股數據 (上市 + 上櫃) ---
-        listed_df = pd.read_csv(LISTED_STOCKS_PATH)
-        otc_df = pd.read_csv(OTC_STOCKS_PATH)
+        # [修正] 指定 encoding='cp950' 來解決繁體中文Windows環境下的CSV檔案編碼問題
+        listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950')
+        otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
         stocks_df = standardize_column_names(stocks_df)
         
@@ -86,7 +87,8 @@ def load_all_data_from_csvs():
             stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
         # --- 載入 ETF 數據 ---
-        etfs_df = pd.read_csv(ETF_PATH)
+        # 由於檔名是 .xlsx，我們使用 read_excel，它通常能更好地自動處理編碼
+        etfs_df = pd.read_excel(ETF_PATH)
         etfs_df = standardize_column_names(etfs_df)
         
         # 清理與轉換 etfs_df 的欄位
@@ -113,7 +115,7 @@ def load_all_data_from_csvs():
         return stocks_df, etfs_df
 
     except FileNotFoundError as e:
-        st.error(f"檔案讀取錯誤: {e}。請確認CSV檔案路徑是否正確。")
+        st.error(f"檔案讀取錯誤: {e}。請確認檔案路徑是否正確。")
         return pd.DataFrame(), pd.DataFrame()
     except Exception as e:
         st.error(f"處理數據時發生預期外的錯誤: {e}")
