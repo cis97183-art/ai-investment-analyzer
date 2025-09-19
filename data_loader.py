@@ -66,9 +66,9 @@ def load_all_data_from_csvs():
 
     try:
         # --- 載入個股數據 (上市 + 上櫃) ---
-        # [修正] 指定 encoding='cp950' 來解決繁體中文Windows環境下的CSV檔案編碼問題
-        listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950')
-        otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950')
+        # [修正] 指定 encoding='cp950' 並加入 encoding_errors='ignore' 來處理檔案中可能存在的無效字元
+        listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
+        otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
         stocks_df = standardize_column_names(stocks_df)
         
