@@ -3,15 +3,13 @@ import streamlit as st
 
 def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
     """
-    【V3.0 - 指標硬篩選版】根據使用者設定的風險偏好，嚴格篩選出滿足所有條件的個股。
-    此版本回歸硬性指標過濾，確保只有100%符合條件的標的才會被選入。
+    【V4.0 - 專業診斷版】優先進行硬性指標篩選，若無完美標的，則自動進入診斷模式，找出最接近的潛力股。
     """
     if stocks_df.empty:
         return pd.DataFrame()
 
     df = stocks_df.copy()
     
-    # 預先處理，確保所有用於篩選的欄位都存在且為數值
     required_cols = {
         'beta': 999, 'market_cap_billions': 0, 'dividend_consecutive_years': 0,
         'yield': 0, 'std_dev_1y': 999, 'roe_avg_3y': -999, 'pe_ratio': 999,
@@ -24,8 +22,8 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
 
     st.write("---")
     
-    result_df = pd.DataFrame()
-    rules_text = ""
+    rules = {}
+    sort_by_col = ''
 
     if risk_profile == '保守型':
         rules = {
@@ -36,10 +34,7 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "年化標準差 < 20%": df['std_dev_1y'] < 20,
             "近3年平均ROE > 8%": df['roe_avg_3y'] > 8
         }
-        # 使用 & 符號串聯所有條件
-        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
-        result_df = df[all_conditions].sort_values(by='yield', ascending=False)
-        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
+        sort_by_col = 'yield'
 
     elif risk_profile == '穩健型':
         rules = {
@@ -50,9 +45,7 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "累月營收年增 > 0%": df['acc_rev_yoy'] > 0,
             "近4Q每股自由現金流 > 0元": df['fcf_per_share_4q'] > 0
         }
-        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
-        result_df = df[all_conditions].sort_values(by='roe_avg_3y', ascending=False)
-        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
+        sort_by_col = 'roe_avg_3y'
 
     elif risk_profile == '積極型':
         rules = {
@@ -60,18 +53,43 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
             "累月營收年增 > 15%": df['acc_rev_yoy'] > 15,
             "近3年加權平均ROE > 15%": df['roe_wavg_3y'] > 15,
         }
-        all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
-        result_df = df[all_conditions].sort_values(by='acc_rev_yoy', ascending=False)
-        rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
+        sort_by_col = 'acc_rev_yoy'
+    
+    if not rules:
+        return pd.DataFrame()
 
-    st.info(f"**篩選規則 ({risk_profile}):** 必須**同時滿足**以下所有條件")
+    rules_text = "<ul>" + "".join([f"<li>{rule}</li>" for rule in rules.keys()]) + "</ul>"
+    
+    # --- [階段一] 執行最嚴格的「完美標準」篩選 ---
+    st.info(f"**篩選模式 ({risk_profile}):**\n\n- **第一階段 (完美標準):** 正在尋找**「同時滿足」**以下所有 **{len(rules)}** 項條件的頂級標的...")
     st.markdown(rules_text, unsafe_allow_html=True)
     
-    st.success(f"篩選完成！共有 {len(result_df)} 檔個股完全符合條件。")
-    
-    # 為了保持介面欄位一致性，加入 'match_count' 欄位，值為規則數量
-    if not result_df.empty:
+    all_conditions = pd.concat(rules.values(), axis=1).all(axis=1)
+    strict_results_df = df[all_conditions]
+
+    if not strict_results_df.empty:
+        st.success(f"**分析結果：** 成功找到 **{len(strict_results_df)}** 檔完全符合所有條件的頂級個股！")
+        result_df = strict_results_df.sort_values(by=sort_by_col, ascending=False).head(50)
         result_df['match_count'] = len(rules)
+    else:
+        # --- [階段二] 若無完美標的，自動進入「診斷模式」 ---
+        st.warning(f"**第一階段分析報告：** 市場上目前 **沒有任何一檔個股** 能「同時滿足」您設定的所有 {len(rules)} 項嚴格條件。")
+        
+        fallback_threshold = max(1, len(rules) - 2)
+        st.info(f"**第二階段 (診斷模式):**\n\n- **分析：** 系統已自動放寬標準，為您找出最接近條件、至少滿足 **{fallback_threshold}** 項指標的「潛力股」清單。")
+
+        df['match_count'] = sum(rule.astype(int) for rule in rules.values())
+        
+        diagnostic_df = df[df['match_count'] >= fallback_threshold].sort_values(
+            by=['match_count', sort_by_col], ascending=[False, False]
+        ).head(50)
+
+        if diagnostic_df.empty:
+            st.error("**最終診斷報告：** 市場數據極端，甚至無法找到滿足大部分條件的個股。建議您調整篩選標準或等候市況改變。")
+            return pd.DataFrame()
+        else:
+            st.success(f"**診斷完成：** 為您找出 **{len(diagnostic_df)}** 檔最接近您理想條件的潛力個股。")
+            result_df = diagnostic_df
 
     display_cols = [
         'stock_id', 'stock_name', 'industry_category', 'match_count',
@@ -80,7 +98,7 @@ def screen_stocks(stocks_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
     ]
     final_cols = [col for col in display_cols if col in result_df.columns]
     
-    return result_df[final_cols].head(50) # 最多顯示50檔
+    return result_df[final_cols]
 
 
 def screen_etfs(etfs_df: pd.DataFrame, risk_profile: str) -> pd.DataFrame:
