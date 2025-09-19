@@ -14,10 +14,8 @@ def clean_numeric_column(series: pd.Series) -> pd.Series:
 
 def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """標準化欄位名稱，移除特殊字元並統一命名"""
-    # [修正] 關鍵修復：在重新命名前，先強制清除所有欄位名稱的前後空白字元
     df.columns = df.columns.str.strip()
     
-    # 創建一個標準化映射
     rename_map = {
         '代號': 'stock_id',
         '名稱': 'stock_name',
@@ -52,12 +50,11 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
         '成立年齡': 'etf_age'
     }
     
-    # 只重新命名存在的欄位
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     return df
 
 # --- 數據載入與快取 ---
-@st.cache_data(ttl=3600) # 快取數據一小時
+@st.cache_data(ttl=3600)
 def load_all_data_from_csvs():
     """
     從三個指定的檔案載入、清理、標準化並合併上市櫃公司與ETF的數據。
@@ -68,31 +65,27 @@ def load_all_data_from_csvs():
         return pd.DataFrame(), pd.DataFrame()
 
     try:
-        # --- 載入個股數據 (上市 + 上櫃) ---
         listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
         otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
         stocks_df = standardize_column_names(stocks_df)
         
-        # 清理與轉換 stocks_df 的欄位
+        # [修正] 新增 roe_wavg_3y 至數值轉換列表
         numeric_cols_stock = [
             'beta', 'market_cap_billions', 'roe_avg_3y', 'pe_ratio', 
             'acc_rev_yoy', 'dividend_consecutive_years', 'yield', 
-            'std_dev_1y', 'fcf_per_share_4q'
+            'std_dev_1y', 'fcf_per_share_4q', 'roe_wavg_3y'
         ]
         for col in numeric_cols_stock:
             if col in stocks_df.columns:
                 stocks_df[col] = clean_numeric_column(stocks_df[col])
         
-        # 將 stock_id 轉換為字串
         if 'stock_id' in stocks_df.columns:
             stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
-        # --- 載入 ETF 數據 ---
         etfs_df = pd.read_excel(ETF_PATH)
         etfs_df = standardize_column_names(etfs_df)
         
-        # 清理與轉換 etfs_df 的欄位
         numeric_cols_etf = [
             'beta', 'std_dev_3y', 'annual_return_incl_div', 
             'expense_ratio', 'yield'
@@ -104,11 +97,9 @@ def load_all_data_from_csvs():
                  else:
                     etfs_df[col] = clean_numeric_column(etfs_df[col])
 
-        # 將 stock_id 轉換為字串
         if 'stock_id' in etfs_df.columns:
             etfs_df['stock_id'] = etfs_df['stock_id'].astype(str)
         
-        # 移除完全重複的資料 (在確認 stock_id 存在後才執行)
         if 'stock_id' in stocks_df.columns:
             stocks_df.drop_duplicates(subset=['stock_id'], inplace=True)
         if 'stock_id' in etfs_df.columns:
@@ -116,9 +107,6 @@ def load_all_data_from_csvs():
 
         return stocks_df, etfs_df
 
-    except FileNotFoundError as e:
-        st.error(f"檔案讀取錯誤: {e}。請確認檔案路徑是否正確。")
-        return pd.DataFrame(), pd.DataFrame()
     except Exception as e:
         st.error(f"處理數據時發生預期外的錯誤: {e}")
         return pd.DataFrame(), pd.DataFrame()
