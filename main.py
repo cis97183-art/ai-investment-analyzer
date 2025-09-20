@@ -9,7 +9,7 @@ import prompts
 def main():
     """程式主執行流程"""
     # 1. 獲取使用者設定 (現在會回傳三個值)
-    risk_profile, portfolio_type, optimization_strategy = prompts.get_user_preferences()
+    risk_profile, portfolio_type = prompts.get_user_preferences()
 
     # 2. 載入並準備所有資料
     master_df = data_loader.load_and_prepare_data(
@@ -35,10 +35,10 @@ def main():
         
         # *** 修正點：傳入新的 optimization_strategy 參數 ***
         final_portfolio = investment_analyzer.build_portfolio(
-            screened_assets=screened_pool, 
-            portfolio_type=portfolio_type,
-            optimization_strategy=optimization_strategy,
-            master_df=master_df
+        screened_assets=screened_pool, 
+        portfolio_type=portfolio_type,
+        risk_profile=risk_profile, # <--- 傳入 risk_profile
+        master_df=master_df
         )
         
         if final_portfolio is not None:

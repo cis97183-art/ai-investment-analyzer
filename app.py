@@ -61,9 +61,12 @@ if "screened_pool" in st.session_state and not st.session_state.screened_pool.em
     strategies_to_run = ['平均權重', '夏普比率優化', '排名加權'] if portfolio_type == '純個股' else ['平均權重']
     
     for strategy in strategies_to_run:
+        # *** 修正點：移除 optimization_strategy 的選擇 ***
         final_portfolio = investment_analyzer.build_portfolio(
-            screened_assets=st.session_state.screened_pool, portfolio_type=portfolio_type,
-            optimization_strategy=strategy, master_df=st.session_state.master_df
+        screened_assets=st.session_state.screened_pool, 
+        portfolio_type=portfolio_type,
+        risk_profile=risk_profile, # <--- 傳入 risk_profile
+        master_df=st.session_state.master_df
         )
         if final_portfolio is not None:
             final_portfolio['權重數值'] = final_portfolio['建議權重'].str.replace('%', '', regex=False).astype(float) / 100
