@@ -19,14 +19,22 @@ def get_user_preferences():
 
 def get_system_prompt(portfolios_dict, user_question):
     """
-    產生一個包含上下文和新能力的完整提示語給 AI 模型。
+    產生一個精簡、高效的提示語給 AI 模型。
     """
     context_str = "目前尚未生成任何投資組合。"
     if portfolios_dict:
         context_str = ""
         for strategy_name, df in portfolios_dict.items():
             context_str += f"--- 投資組合策略: {strategy_name} ---\n"
-            context_str += df.to_string(index=False)
+            # *** 修正點：只選擇最重要的欄位給 AI ***
+            display_cols = ['代號', '名稱', '產業別', '建議權重', '配置金額(元)']
+            # 檢查夏普比率是否存在，若存在則加入
+            if '夏普比率' in df.columns:
+                display_cols.insert(3, '夏普比率')
+            
+            # 只選取存在的欄位
+            existing_display_cols = [col for col in display_cols if col in df.columns]
+            context_str += df[existing_display_cols].to_string(index=False)
             context_str += "\n\n"
 
     prompt = f"""
