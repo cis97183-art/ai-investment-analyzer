@@ -1,13 +1,9 @@
-# --- FinMind API 金鑰設定 ---
-#
-# 請將 "YOUR_FINMIND_API_TOKEN" 這段文字
-# 替換成您從 FinMind 網站免費申請的 API Token。
-#
-# 免費申請網址: https://finmind.nctu.edu.tw/
-#
-# 範例:
-# FINMIND_API_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-#
+# config.py
 
-FINMIND_API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRlIjoiMjAyNS0wOS0xOSAxMTozMjowNSIsInVzZXJfaWQiOiJhbHZpbmh1YW5nIiwiaXAiOiIxMTguMjMyLjExNS4yNDMiLCJleHAiOjE3NTg4NTc1MjV9.aQJjFDjis8fTTIKVL14NH3KZHF9Cj1tapez4uA8n5WU"
+# --- 檔案路徑設定 ---
+LISTED_STOCK_PATH = 'listed stock. without etfcsv.csv'
+OTC_STOCK_PATH = 'OTC without etf.csv'
+ETF_PATH = 'ETFALL.xlsx - merged_stock_data.csv'
 
+# --- 可調整參數 ---
+TARGET_ASSET_COUNT = 10 # 篩選標的時的目標數量
