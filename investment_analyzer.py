@@ -3,167 +3,140 @@
 import pandas as pd
 import numpy as np
 from portfolio_rules import PORTFOLIO_CONSTRUCTION_RULES
-import config
 
-def calculate_hhi(weights):
-    """計算 Herfindahl-Hirschman Index (HHI)"""
-    if not weights:
-        return 0.0
+def _calculate_hhi(weights: list) -> float:
+    """計算 HHI 集中度指數"""
     return sum([w**2 for w in weights])
 
-def _factor_weighting(df, factor_col):
+def _to_numeric(series):
+    """輔助函式：將 Series 轉換為數值型態，錯誤則轉為 NaN"""
+    return pd.to_numeric(series, errors='coerce')
+
+def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str) -> (pd.DataFrame, dict):
     """
-    一個輔助函式，根據指定的因子欄位來計算權重。
-    因子值越高，權重越高。
-    """
-    # 確保因子欄位存在
-    if factor_col not in df.columns:
-        print(f"警告：因子欄位 '{factor_col}' 不存在，退回平均權重。")
-        return [1 / len(df)] * len(df)
-        
-    factor_values = df[factor_col].copy()
-    # 將負值或空值處理為0，避免計算錯誤
-    factor_values[factor_values < 0] = 0
-    factor_values.fillna(0, inplace=True)
+    根據使用者偏好與規則建構投資組合。
     
-    total_factor = factor_values.sum()
-    
-    # 如果所有因子的總和為0，則退回平均權重
-    if total_factor > 0:
-        return (factor_values / total_factor).tolist()
-    else:
-        print(f"警告：因子 '{factor_col}' 的總和為0，退回平均權重。")
-        return [1 / len(df)] * len(df)
-
-def build_portfolio(screened_assets, portfolio_type, risk_profile, master_df):
+    返回:
+        - portfolio_df: 最終的投資組合 DataFrame (包含代碼、名稱、權重等)
+        - candidate_pools: 用於建構此組合的候選標的池 (字典)
     """
-    根據最新、最詳細的客製化規則建構投資組合。
-    回傳: (DataFrame of portfolio, float of HHI value)
-    """
-    print(f"\n--- 開始建構【{risk_profile} - {portfolio_type}】投資組合 ---")
+    print(f"\n--- 步驟 3: 建構 {risk_preference} 型 {portfolio_type} 投資組合 ---")
     
-    try:
-        rules = PORTFOLIO_CONSTRUCTION_RULES[risk_profile][portfolio_type]
-    except KeyError:
-        print(f"錯誤：找不到對應的組合規則 [{risk_profile}][{portfolio_type}]")
-        return None, 0.0
+    rules = PORTFOLIO_CONSTRUCTION_RULES.get(portfolio_type, {}).get(risk_preference)
+    if not rules:
+        raise ValueError("找不到對應的投資組合建構規則。")
 
-    final_portfolio_df = pd.DataFrame()
-    weights = []
-    hhi = 0.0
-
-    # ========================== 純個股 (Pure Stock) ==========================
-    if portfolio_type == '純個股':
-        stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].copy()
+    portfolio_df = pd.DataFrame()
+    candidate_pools = {}
+    
+    # --- 策略一：純個股組合 ---
+    if portfolio_type == 'Stocks':
+        source_pool_name = rules['source_pool']
+        source_pool = asset_pools.get(source_pool_name, pd.DataFrame())
+        candidate_pools[source_pool_name] = source_pool
         
-        factor_col = rules['weighting_factor']
-        print(f"採用「{factor_col}」因子進行排序...")
-        stocks.sort_values(by=factor_col, ascending=False, inplace=True)
-        
-        selection = []
-        industry_count = {}
-        for _, row in stocks.iterrows():
-            if len(selection) >= rules['num_assets_max']:
-                break
-            industry = row['產業別']
-            if industry_count.get(industry, 0) < rules['max_industry_assets']:
-                selection.append(row)
-                industry_count[industry] = industry_count.get(industry, 0) + 1
-        
-        if len(selection) < rules['num_assets_min']:
-            return None, 0.0
-        
-        final_portfolio_df = pd.DataFrame(selection).reset_index(drop=True)
-        
-        if rules['weighting_method'] == '因子加權':
-            weights = _factor_weighting(final_portfolio_df, factor_col)
-        else: # 平均權重
-            weights = [1 / len(final_portfolio_df)] * len(final_portfolio_df)
-
-    # ========================== 純 ETF (Pure ETF) ==========================
-    elif portfolio_type == '純 ETF':
-        etfs = master_df[master_df['資產類別'] == 'ETF'].copy()
-        if len(etfs) < rules['num_assets_min']:
-            return None, 0.0
-
-        etfs_calc = etfs[etfs['一年(σ年)'] > 0].copy()
-        if etfs_calc.empty: return None, 0.0
-
-        etfs_calc['sharpe_ratio'] = (etfs_calc['年報酬率(含息)'].fillna(0) - config.RISK_FREE_RATE) / (etfs_calc['一年(σ年)'] / 100)
-        etfs_calc.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
-
-        selection_list = []
-        selected_indices = []
-
-        if rules.get('required_etf_type'):
-            required_etf = etfs_calc[etfs_calc['產業別'] == rules['required_etf_type']].head(1)
-            if not required_etf.empty:
-                selection_list.append(required_etf.iloc[0].to_dict())
-                selected_indices.append(required_etf.index[0])
-        
-        needed = rules['num_assets_max'] - len(selection_list)
-        if needed > 0:
-            remaining_etfs = etfs_calc.drop(index=selected_indices, errors='ignore')
-            selection_list.extend(remaining_etfs.head(needed).to_dict('records'))
-
-        if len(selection_list) < rules['num_assets_min']:
-            return None, 0.0
-        
-        final_portfolio_df = pd.DataFrame(selection_list)
-        num_assets = len(final_portfolio_df)
-
-        if rules['weighting_method'] == '波動率倒數加權':
-            inv_vols = 1 / final_portfolio_df['一年(σ年)']
-            weights = (inv_vols / inv_vols.sum()).tolist()
-        elif rules['weighting_method'] == '集中加權':
-            weights = [0.0] * num_assets
-            weights[0] = 1.0 # 100% 集中在第一支
-        else: # 平均權重
-            weights = [1 / num_assets] * num_assets
+        if source_pool.empty:
+            print(f"警告: '{source_pool_name}' 標的池為空，無法建立投資組合。")
+            return pd.DataFrame(), candidate_pools
             
-    # ========================== 混合型 (Mixed) ==========================
-    elif portfolio_type == '混合型':
-        # Core 部位: 從 master_df 拿 ETF
-        etfs = master_df[master_df['資產類別'] == 'ETF'].copy()
-        core_etfs_calc = etfs[etfs['產業別'].isin(rules['core_etf_type']) & (etfs['一年(σ年)'] > 0)]
-        if not core_etfs_calc.empty:
-            core_etfs_calc['sharpe_ratio'] = (core_etfs_calc['年報酬率(含息)'].fillna(0) - config.RISK_FREE_RATE) / (core_etfs_calc['一年(σ年)'] / 100)
-            core_etfs_calc.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
-        core_df = core_etfs_calc.head(rules['core_etfs'])
-
-        # Satellite 部位: 從 screened_assets 拿個股
-        stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].copy()
-        satellite_sort_factor = PORTFOLIO_CONSTRUCTION_RULES[risk_profile]['純個股']['weighting_factor']
-        stocks.sort_values(by=satellite_sort_factor, ascending=False, inplace=True)
+        # 依產業分散原則挑選標的
+        num_assets = rules['num_assets'][1] # 取數量上限
+        max_per_industry = rules['diversification'].get('max_per_industry', num_assets)
         
-        satellite_selection = []
-        industry_count = {}
-        for _, row in stocks.iterrows():
-            if len(satellite_selection) >= rules['satellite_stocks']: break
-            industry = row['產業別']
-            if industry_count.get(industry, 0) < rules['max_industry_assets']:
-                satellite_selection.append(row)
-                industry_count[industry] = industry_count.get(industry, 0) + 1
-        satellite_df = pd.DataFrame(satellite_selection)
-
-        if core_df.empty or satellite_df.empty:
-            return None, 0.0
-
-        # 整合與分配權重
-        core_weight, satellite_weight = rules['core_weight'], 1 - rules['core_weight']
-        core_df['建議權重'] = [f"{(core_weight / len(core_df)):.2%}"] * len(core_df)
-        satellite_df['建議權重'] = [f"{(satellite_weight / len(satellite_df)):.2%}"] * len(satellite_df)
+        selected_stocks = []
+        industry_counts = {}
+        for _, stock in source_pool.iterrows():
+            if len(selected_stocks) >= num_assets:
+                break
+            industry = stock['產業別']
+            if industry_counts.get(industry, 0) < max_per_industry:
+                selected_stocks.append(stock)
+                industry_counts[industry] = industry_counts.get(industry, 0) + 1
         
-        final_portfolio_df = pd.concat([core_df, satellite_df], ignore_index=True)
-        weights = [core_weight / len(core_df)] * len(core_df) + [satellite_weight / len(satellite_df)] * len(satellite_df)
-    
-    # 最終處理與回傳
-    hhi = calculate_hhi(weights)
-    if '建議權重' not in final_portfolio_df.columns:
-        final_portfolio_df['建議權重'] = [f"{w:.2%}" for w in weights]
-    
-    # 只選擇最終報告需要的欄位
-    cols_to_keep = ['代號', '名稱', '產業別', '資產類別', '建議權重', 'sharpe_ratio']
-    final_cols = [col for col in cols_to_keep if col in final_portfolio_df.columns]
-    
-    return final_portfolio_df[final_cols], hhi
+        portfolio_df = pd.DataFrame(selected_stocks)
+        
+        # 分配權重
+        weight_factor = rules.get('weighting_factor')
+        portfolio_df[weight_factor] = _to_numeric(portfolio_df[weight_factor])
+        
+        # 因子加權，若因子數值<=0或為NaN，給予極小權重
+        factor_values = portfolio_df[weight_factor].fillna(0.0001)
+        factor_values[factor_values <= 0] = 0.0001
+        total_factor = factor_values.sum()
+        
+        if total_factor > 0:
+            portfolio_df['權重(%)'] = (factor_values / total_factor * 100).round(2)
+        else: # 如果所有因子都是負的，就用平均權重
+             portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
+
+    # --- 策略二：純ETF組合 ---
+    elif portfolio_type == 'ETF':
+        # 這是簡化版的ETF配置，僅作為範例
+        # 完整的機構級配置需要更複雜的模型 (例如 MVO)
+        selected_etfs = []
+        
+        # 挑選股票型ETF
+        stock_alloc = rules['asset_allocation']['Stocks']
+        if stock_alloc > 0:
+            stock_pool_names = rules['stock_source_pools']
+            # 合併所有候選股票ETF池
+            all_stock_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in stock_pool_names]).drop_duplicates(subset=['代碼'])
+            candidate_pools['股票ETF'] = all_stock_etfs.sort_values(by='年報酬率.含息.', ascending=False)
+            # 簡單挑選2檔績效最好的
+            selected_etfs.extend(candidate_pools['股票ETF'].head(2).to_dict('records'))
+
+        # 挑選債券型ETF
+        bond_alloc = rules['asset_allocation']['Bonds']
+        if bond_alloc > 0:
+            bond_pool_names = rules['bond_source_pools']
+            all_bond_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in bond_pool_names]).drop_duplicates(subset=['代碼'])
+            candidate_pools['債券ETF'] = all_bond_etfs.sort_values(by='一年(σ年)')
+            # 簡單挑選2檔波動最低的
+            selected_etfs.extend(candidate_pools['債券ETF'].head(2).to_dict('records'))
+            
+        portfolio_df = pd.DataFrame(selected_etfs).drop_duplicates(subset=['代碼'])
+        # 簡化權重分配：平均分配
+        portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
+
+    # --- 策略三：混合型組合 ---
+    elif portfolio_type == 'Hybrid':
+        core_alloc = rules['core_satellite_split']['core']
+        satellite_alloc = rules['core_satellite_split']['satellite']
+        
+        # 核心ETF
+        core_etf_pools_names = rules['core_etf_pools']
+        all_core_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in core_etf_pools_names]).drop_duplicates(subset=['代碼'])
+        candidate_pools['核心ETF'] = all_core_etfs.sort_values(by='一年(σ年)')
+        core_selection = candidate_pools['核心ETF'].head(2) # 挑選波動最低的2檔
+        
+        # 衛星個股
+        satellite_pool_name = rules['satellite_stock_pool']
+        satellite_pool = asset_pools.get(satellite_pool_name, pd.DataFrame())
+        candidate_pools['衛星個股'] = satellite_pool
+        num_satellite = rules['num_satellite_stocks'][1]
+        satellite_selection = candidate_pools['衛星個股'].head(num_satellite)
+
+        # 合併並分配權重
+        portfolio_df = pd.concat([core_selection, satellite_selection])
+        num_core = len(core_selection)
+        num_satellite = len(satellite_selection)
+        
+        if num_core > 0:
+            portfolio_df.loc[core_selection.index, '權重(%)'] = (core_alloc * 100 / num_core).round(2)
+        if num_satellite > 0:
+            portfolio_df.loc[satellite_selection.index, '權重(%)'] = (satellite_alloc * 100 / num_satellite).round(2)
+        
+    else:
+        print(f"錯誤: 不支援的組合類型 '{portfolio_type}'")
+        return pd.DataFrame(), {}
+
+    # 確保權重總和為100%
+    if not portfolio_df.empty:
+        diff = 100 - portfolio_df['權重(%)'].sum()
+        portfolio_df.loc[portfolio_df.index[0], '權重(%)'] += diff
+
+    # 計算 HHI
+    hhi = _calculate_hhi(portfolio_df['權重(%)'].values / 100)
+    print(f"投資組合建構完成，共 {len(portfolio_df)} 筆標的，HHI值為: {hhi:.4f}")
+
+    return portfolio_df, candidate_pools
