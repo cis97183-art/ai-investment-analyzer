@@ -1,7 +1,7 @@
-# portfolio_rules.py
+# portfolio_rules.py (最終規則版)
 
 # ==================================
-# 規則一：風險偏好標的篩選規則 (單一規則版)
+# 規則一：風險偏好標的篩選規則 (維持不變)
 # ==================================
 SCREENING_RULES = {
     '保守型': {
@@ -22,24 +22,59 @@ SCREENING_RULES = {
 }
 
 # ==================================
-# 規則二：投資組合建構規則 (維持不變)
+# 規則二：客製化投資組合建構規則 (全新結構)
 # ==================================
 PORTFOLIO_CONSTRUCTION_RULES = {
-    '純個股': {
-        'min_assets': 5,
-        'max_assets': 10,
-        'max_industry_assets': 2,
-        'hhi_limit': 0.25
+    '保守型': {
+        '純個股': {
+            'num_assets_min': 8, 'num_assets_max': 10, 'max_industry_assets': 2,
+            'weighting_method': '因子加權', 'weighting_factor': '成交價現金殖利率',
+            'hhi_limit': 0.20
+        },
+        '純 ETF': {
+            'num_assets_min': 2, 'num_assets_max': 3,
+            'weighting_method': '波動率倒數加權', # Custom logic
+            'required_etf_type': '債券ETF'
+        },
+        '混合型': {
+            'core_etfs': 1, 'satellite_stocks': 5, 'core_weight': 0.7,
+            'core_etf_type': ['債券ETF', '高股息ETF'],
+            'hhi_limit': 0.25, 'max_industry_assets': 2
+        }
     },
-    '純 ETF': {
-        'min_assets': 2,
-        'max_assets': 4,
+    '穩健型': {
+        '純個股': {
+            'num_assets_min': 5, 'num_assets_max': 8, 'max_industry_assets': 2,
+            'weighting_method': '因子加權', 'weighting_factor': '近3年平均ROE(%)',
+            'hhi_limit': 0.25
+        },
+        '純 ETF': {
+            'num_assets_min': 2, 'num_assets_max': 4,
+            'weighting_method': '平均權重',
+            'required_etf_type': '國內成分股ETF'
+        },
+        '混合型': {
+            'core_etfs': 1, 'satellite_stocks': 5, 'core_weight': 0.6,
+            'core_etf_type': ['國內成分股ETF'],
+            'hhi_limit': 0.30, 'max_industry_assets': 2
+        }
     },
-    '混合型': {
-        'core_etfs': 2,
-        'satellite_stocks': 5,
-        'core_weight': 0.7,
-        'hhi_limit': 0.3,
-        'max_industry_assets': 2
+    '積極型': {
+        '純個股': {
+            'num_assets_min': 5, 'num_assets_max': 7, 'max_industry_assets': 3,
+            'weighting_method': '因子加權', 'weighting_factor': '累月營收年增(%)',
+            'hhi_limit': 0.35 # HHI 僅供參考
+        },
+        '純 ETF': {
+            'num_assets_min': 2, 'num_assets_max': 3,
+            'weighting_method': '集中加權', # Custom logic
+            'required_etf_type': None # 專注主題式
+        },
+        '混合型': {
+            'core_etfs': 1, 'satellite_stocks': 5, 'core_weight': 0.6,
+            'core_etf_type': ['科技相關ETF'], # e.g., '國外成分股ETF' or specific keywords
+            'hhi_limit': None, # HHI 僅供參考, 應高於 0.3
+            'max_industry_assets': 3
+        }
     }
 }
