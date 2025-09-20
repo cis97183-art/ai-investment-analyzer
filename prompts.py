@@ -37,29 +37,23 @@ def get_user_preferences():
     return risk_profile, portfolio_type, optimization_strategy
 
 # *** 新增給 AI 使用的提示語函式 ***
-def get_system_prompt(portfolio_df, user_question):
+def get_ai_response(portfolios_dict, user_question):
     """
-    產生一個包含上下文的完整提示語給 AI 模型。
+    呼叫 Gemini API 來獲取 AI 的回答。
+    現在接收一個包含所有 portfolio 的字典。
     """
-    # 將 DataFrame 轉換為易於閱讀的字串格式
-    portfolio_str = portfolio_df.to_string(index=False)
-
-    prompt = f"""
-    你是一位專業、友善且客觀的AI投資組合分析助理。你的任務是根據以下提供的投資組合數據，回答使用者的問題。
-
-    **規則與限制:**
-    1. 你**不能**提供任何未來的預測或直接的買賣建議。你的回答應專注於解釋這份報告的數據。
-    2. 你的回答必須基於以下提供的「當前投資組合數據」。不要提及任何外部市場資訊。
-    3. 回答應簡潔、有條理，並使用繁體中文。
-
-    ---
-    **當前投資組合數據:**
-    {portfolio_str}
-    ---
-
-    **使用者問題:**
-    {user_question}
-
-    **你的回答:**
-    """
-    return prompt
+    try:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        genai.configure(api_key=api_key)
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # 組合包含所有 portfolio 上下文的提示語
+        prompt = get_system_prompt(portfolios_dict, user_question)
+        
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        error_message = f"呼叫 AI 時發生錯誤：{e} \n\n請確認：\n1. `.streamlit/secrets.toml` 檔案已建立。\n2. `GOOGLE_API_KEY` 已正確設定。"
+        st.error(error_message)
+        return None
