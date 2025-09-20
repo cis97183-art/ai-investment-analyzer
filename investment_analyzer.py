@@ -1,4 +1,4 @@
-# investment_analyzer.py (升級版 v2)
+# investment_analyzer.py (修正版)
 
 import pandas as pd
 import numpy as np
@@ -15,14 +15,13 @@ def rank_based_weighting(df):
     排名越高，權重越重。
     """
     num_assets = len(df)
-    # 建立一個反向排名分數 (第一名得分最高)
     rank_scores = np.arange(num_assets, 0, -1)
     total_score = np.sum(rank_scores)
     
     if total_score > 0:
         weights = rank_scores / total_score
         return weights.tolist()
-    else: # 避免除以零
+    else:
         return [1 / num_assets] * num_assets
 
 def build_portfolio(screened_assets, portfolio_type, optimization_strategy, master_df):
@@ -73,7 +72,7 @@ def build_portfolio(screened_assets, portfolio_type, optimization_strategy, mast
         if optimization_strategy in ['排名加權', '夏普比率優化']:
              print(f"採用【排名加權】策略分配權重...")
              portfolio_weights = rank_based_weighting(final_selection_df)
-        else: # 平均權重
+        else:
             print("採用【平均權重】策略...")
             num_assets = len(final_selection_df)
             portfolio_weights = [1 / num_assets] * num_assets
@@ -82,7 +81,6 @@ def build_portfolio(screened_assets, portfolio_type, optimization_strategy, mast
         print(f"純個股組合 HHI: {hhi:.4f} (限制 < {rules['hhi_limit']})")
 
     elif portfolio_type in ['純 ETF', '混合型']:
-        # 這兩種類型維持原有的平均權重邏輯
         if portfolio_type == '純 ETF':
             etfs = screened_assets[screened_assets['資產類別'] == 'ETF'].copy()
             target_size = min(rules['max_assets'], len(etfs))
@@ -91,7 +89,7 @@ def build_portfolio(screened_assets, portfolio_type, optimization_strategy, mast
             num_assets = len(portfolio_df)
             portfolio_codes = portfolio_df['代號'].tolist()
             portfolio_weights = [1 / num_assets] * num_assets
-        else: # 混合型
+        else:
             core_etfs = screened_assets[screened_assets['資產類別'] == 'ETF'].head(rules['core_etfs'])
             satellite_stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].head(rules['satellite_stocks'])
             if core_etfs.empty or satellite_stocks.empty: return None
@@ -102,6 +100,8 @@ def build_portfolio(screened_assets, portfolio_type, optimization_strategy, mast
             portfolio_weights = core_weights + satellite_weights
 
     final_portfolio = pd.DataFrame({'代號': portfolio_codes, '建議權重': [f"{w:.2%}" for w in portfolio_weights]})
-    final_portfolio = final_portfolio.merge(master_df[['代號', '名稱', '資產類別']], on='代號', how='left')
+    
+    # *** 修正點：在合併時，多選入 '產業別' 欄位 ***
+    final_portfolio = final_portfolio.merge(master_df[['代號', '名稱', '產業別', '資產類別']], on='代號', how='left')
     
     return final_portfolio
