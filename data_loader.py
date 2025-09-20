@@ -3,14 +3,17 @@ import streamlit as st
 import os
 
 # --- 常數設定 ---
+# 注意：為了與上傳的檔案名稱一致，這裡將 .xlsx 改為 .csv
 LISTED_STOCKS_PATH = 'listed stock. without etfcsv.csv'
 OTC_STOCKS_PATH = 'OTC without etf.csv'
-ETF_PATH = 'ETFALL.xlsx'
+ETF_PATH = 'ETFALL.xlsx - merged_stock_data.csv' 
 
 # --- 核心數據清理與轉換函數 ---
 def clean_numeric_column(series: pd.Series) -> pd.Series:
     """將欄位轉換為數值型態，並處理無效值"""
-    return pd.to_numeric(series.astype(str).str.replace(',', ''), errors='coerce')
+    # 先將所有值轉為字串，移除千分位逗號，再轉為數值
+    # errors='coerce' 會將無法轉換的值變為 NaN (Not a Number)
+    return pd.to_numeric(series.astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce')
 
 def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """標準化欄位名稱，移除特殊字元並統一命名"""
@@ -18,6 +21,7 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     
     rename_map = {
         '代號': 'stock_id',
+        '代碼.x': 'stock_id', # 處理ETF檔案中的欄位
         '名稱': 'stock_name',
         '市場': 'market',
         '產業別': 'industry_category',
@@ -31,50 +35,44 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
         '最新單季ROE(%)': 'roe_latest_q',
         'PER': 'pe_ratio',
         '累月營收年增(%)': 'acc_rev_yoy',
-        '最新季度負債總額佔比(%)': 'debt_ratio',
+        '最新季度負債總額佔比(%)': 'debt_ratio_latest_q',
         '現金股利連配次數': 'dividend_consecutive_years',
         '成交價現金殖利率': 'yield',
         '一年(σ年)': 'std_dev_1y',
+        '三年.σ年.': 'std_dev_3y',
         '僑外投資持股(%)': 'foreign_holding_pct',
         '本國法人持股(%)': 'local_corp_holding_pct',
         '最新近4Q每股自由金流(元)': 'fcf_per_share_4q',
-        '代碼.y': 'stock_id', 
-        '三年.σ年.': 'std_dev_3y',
-        '五年.σ年.': 'std_dev_5y',
-        '市價': 'close_price',
-        '資產規模.億.': 'asset_size_billions',
-        '近四季殖利率': 'yield_4q',
+        # --- V3.0 新增: 處理ETFALL.xlsx中的欄位 ---
+        '市價': 'price',
+        '漲跌...': 'price_change', # 修正錯誤的關鍵
+        '折溢價...': 'premium_discount_pct',
         '年報酬率.含息.': 'annual_return_incl_div',
         '內扣費用.保管.管理.': 'expense_ratio',
-        '受益人數': 'num_of_beneficiaries',
-        '成立年齡': 'etf_age'
     }
     
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    df.rename(columns=rename_map, inplace=True)
     return df
 
-# --- 數據載入與快取 ---
-@st.cache_data(ttl=3600)
+# --- 主要數據加載與整合函數 ---
+@st.cache_data
 def load_all_data_from_csvs():
-    """
-    從三個指定的檔案載入、清理、標準化並合併上市櫃公司與ETF的數據。
-    返回兩個獨立的DataFrame: 一個給個股，一個給ETF。
-    """
-    if not all(os.path.exists(p) for p in [LISTED_STOCKS_PATH, OTC_STOCKS_PATH, ETF_PATH]):
-        st.error("錯誤：缺少必要的數據檔案 (上市、上櫃或ETF)。請確保檔案都存在於專案目錄中。")
-        return pd.DataFrame(), pd.DataFrame()
-
+    """從多個CSV檔案加載、清理並整合所有數據"""
     try:
-        listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
-        otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='cp950', encoding_errors='ignore')
+        # 讀取上市櫃股票資料
+        listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='utf-8')
+        otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='utf-8')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
+        
         stocks_df = standardize_column_names(stocks_df)
         
-        # [修正] 新增 roe_wavg_3y 至數值轉換列表
+        # 清理股票數據中的數值欄位
         numeric_cols_stock = [
-            'beta', 'market_cap_billions', 'roe_avg_3y', 'pe_ratio', 
-            'acc_rev_yoy', 'dividend_consecutive_years', 'yield', 
-            'std_dev_1y', 'fcf_per_share_4q', 'roe_wavg_3y'
+            'beta', 'market_cap_billions', 'years_since_listing', 'roe_avg_3y',
+            'roe_latest_q', 'pe_ratio', 'acc_rev_yoy', 'debt_ratio_latest_q',
+            'dividend_consecutive_years', 'yield', 'std_dev_1y', 
+            'foreign_holding_pct', 'local_corp_holding_pct',
+            'fcf_per_share_4q', 'roe_wavg_3y'
         ]
         for col in numeric_cols_stock:
             if col in stocks_df.columns:
@@ -83,31 +81,26 @@ def load_all_data_from_csvs():
         if 'stock_id' in stocks_df.columns:
             stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
-        etfs_df = pd.read_excel(ETF_PATH)
+        # 讀取並清理ETF資料
+        etfs_df = pd.read_csv(ETF_PATH, encoding='utf-8')
         etfs_df = standardize_column_names(etfs_df)
         
         numeric_cols_etf = [
-            'beta', 'std_dev_3y', 'annual_return_incl_div', 
-            'expense_ratio', 'yield'
+            'beta', 'std_dev_3y', 'annual_return_incl_div', 'yield',
+            'expense_ratio', 'price', 'price_change', 'premium_discount_pct' # 修正錯誤的關鍵
         ]
         for col in numeric_cols_etf:
             if col in etfs_df.columns:
-                 if col == 'yield' and '成交價現金殖利率' in etfs_df.columns:
-                     etfs_df[col] = clean_numeric_column(etfs_df['成交價現金殖利率'])
-                 else:
-                    etfs_df[col] = clean_numeric_column(etfs_df[col])
+                 etfs_df[col] = clean_numeric_column(etfs_df[col])
 
         if 'stock_id' in etfs_df.columns:
             etfs_df['stock_id'] = etfs_df['stock_id'].astype(str)
-        
-        if 'stock_id' in stocks_df.columns:
-            stocks_df.drop_duplicates(subset=['stock_id'], inplace=True)
-        if 'stock_id' in etfs_df.columns:
-            etfs_df.drop_duplicates(subset=['stock_id'], inplace=True)
 
         return stocks_df, etfs_df
-
-    except Exception as e:
-        st.error(f"處理數據時發生預期外的錯誤: {e}")
+    
+    except FileNotFoundError as e:
+        st.error(f"錯誤：找不到必要的資料檔案 '{e.filename}'。請確認檔案是否已上傳且位於正確的路徑。")
         return pd.DataFrame(), pd.DataFrame()
-
+    except Exception as e:
+        st.error(f"讀取資料時發生未預期的錯誤: {e}")
+        return pd.DataFrame(), pd.DataFrame()
