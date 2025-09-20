@@ -15,9 +15,8 @@ def main():
     )
     if master_df is None: return
 
-    screened_pool = screener.screen_assets(
-        master_df, risk_profile, config.TARGET_ASSET_COUNT
-    )
+    # *** 修正點：移除 target_count 參數 ***
+    screened_pool = screener.screen_assets(master_df, risk_profile)
     
     if screened_pool is not None and not screened_pool.empty:
         print(f"\n--- 【{risk_profile}】最終標的池 (排序後前15名) ---")
