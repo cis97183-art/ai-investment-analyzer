@@ -1,7 +1,7 @@
-# prompts.py
+# prompts.py (修正版)
 
 def get_user_preferences():
-    """獲取使用者的風險偏好與組合類型"""
+    """獲取使用者的風險偏好、組合類型與優化策略"""
     print("--- 投資組合建構器 ---")
     
     # 風險偏好
@@ -24,4 +24,16 @@ def get_user_preferences():
         else:
             print("無效輸入，請重新輸入。")
 
-    return risk_profile, portfolio_type
+    # *** 新增：優化策略選擇 ***
+    strategy_map = {'1': '平均權重', '2': '夏普比率優化', '3': '因子加權'}
+    optimization_strategy = '平均權重' # 預設值
+    if portfolio_type == '純個股': # 優化策略只針對純個股組合
+        while True:
+            strategy_choice = input("請選擇個股優化策略 (1:平均權重, 2:夏普比率優化, 3:因子加權): ")
+            if strategy_choice in strategy_map:
+                optimization_strategy = strategy_map[strategy_choice]
+                break
+            else:
+                print("無效輸入，請重新輸入。")
+
+    return risk_profile, portfolio_type, optimization_strategy
