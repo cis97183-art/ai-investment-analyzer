@@ -1,4 +1,4 @@
-# data_loader.py (最終修正版 for Excel)
+# data_loader.py (最終修正版 v2)
 
 import pandas as pd
 import numpy as np
@@ -41,7 +41,6 @@ def clean_etf_data(file_path):
     """
     print(f"--- 開始處理【ETF 資料】---")
     try:
-        # *** 修正點：將 pd.read_csv 改為 pd.read_excel ***
         df = pd.read_excel(file_path)
         print(f"成功讀取 Excel 檔案: {file_path}")
     except FileNotFoundError:
@@ -51,15 +50,30 @@ def clean_etf_data(file_path):
         print(f"讀取檔案時發生錯誤: {e}")
         return None
 
-    # Excel 讀取進來後，後續的清理流程與之前相同
-    original_cols = df.columns.tolist()
-    new_cols = [col.replace('...', '').replace('.張.', '').replace('.億.', '').replace('.x', '').replace('.y', '') for col in original_cols]
-    df.columns = new_cols
-    print("欄位名稱清理完成。")
-
+    # *** 修正點：使用精準的 rename，避免產生重複欄位 ***
+    rename_map = {
+        '代碼.y': '代號',
+        '市值.億.': '市值(億)',
+        '一年.β.': '一年(β)',
+        '三年.σ年.': '一年(σ年)',
+        '漲跌...': '漲跌',
+        '折溢價...': '折溢價',
+        '五日均量.張.': '五日均量',
+        '資產規模.億.': '資產規模',
+        '年報酬率.含息.': '年報酬率(含息)',
+        '內扣費用.保管.管理.': '內扣費用'
+    }
+    df.rename(columns=rename_map, inplace=True)
+    
+    # 刪除不再需要的 `代碼.x` 欄位
+    if '代碼.x' in df.columns:
+        df.drop(columns=['代碼.x'], inplace=True)
+    
+    print("欄位名稱清理與標準化完成。")
+    
     df.replace({'--': np.nan, 'NA': np.nan}, inplace=True)
     
-    percent_cols = ['折溢價', '近四季殖利率', '年報酬率含息', '本月月增率', '成交價現金殖利率']
+    percent_cols = ['折溢價', '近四季殖利率', '年報酬率(含息)', '本月月增率', '成交價現金殖利率']
     for col in percent_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace('%', '', regex=False)
@@ -67,7 +81,7 @@ def clean_etf_data(file_path):
             if pd.api.types.is_numeric_dtype(df[col]):
                 df[col] = df[col] / 100
 
-    other_numeric_cols = ['市價', '五日均量', '資產規模', '內扣費用保管管理', '受益人數', '成立年齡', '一年.β.', '三年.σ年.', '五年.σ年.']
+    other_numeric_cols = ['市價', '五日均量', '資產規模', '內扣費用', '受益人數', '成立年齡', '一年(β)', '一年(σ年)']
     for col in other_numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -90,17 +104,6 @@ def load_and_prepare_data(listed_path, otc_path, etf_path):
     df_listed['資產類別'] = '上市櫃股票'
     df_otc['資產類別'] = '上市櫃股票'
     df_etf['資產類別'] = 'ETF'
-    
-    df_etf.rename(columns={
-        '代碼.y': '代號',
-        '市值.億.': '市值(億)',
-        '一年.β.': '一年(β)',
-        '三年.σ年.': '一年(σ年)'
-    }, inplace=True)
-    
-    if '代碼.x' in df_etf.columns:
-        df_etf.drop(columns=['代碼.x'], inplace=True)
-        print("已修正 ETF 資料：使用 '代碼.y' 作為代號，並移除 '代碼.x'。")
 
     master_df = pd.concat([df_listed, df_otc, df_etf], ignore_index=True)
     master_df['代號'] = master_df['代號'].astype(str)
