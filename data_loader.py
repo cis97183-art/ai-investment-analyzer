@@ -22,7 +22,7 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {
         # 通用欄位
         '代號': 'stock_id',
-        '代碼.x': 'stock_id', 
+        '代碼.y': 'stock_id', # V6.0 修正: 根據使用者指示，將 ETF 的 stock_id 對應到正確的 '代碼.y' 欄位
         '名稱': 'stock_name',
         '市場': 'market',
         '產業別': 'industry_category',
