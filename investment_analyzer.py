@@ -1,4 +1,4 @@
-# investment_analyzer.py (策略重構版)
+# investment_analyzer.py (最終規則修正版)
 
 import pandas as pd
 import numpy as np
@@ -7,121 +7,100 @@ import config
 
 def calculate_hhi(weights):
     """計算 HHI 指數"""
+    if not weights: return 0.0
     return sum([w**2 for w in weights])
 
 def build_portfolio(screened_assets, portfolio_type, risk_profile, master_df):
     """
-    根據更新的、更詳細的規則建構投資組合。
+    根據最新、最詳細的規則建構投資組合。
+    回傳: (DataFrame of portfolio, float of HHI value)
     """
     print(f"\n--- 開始建構【{risk_profile} - {portfolio_type}】投資組合 ---")
     
     rules = PORTFOLIO_CONSTRUCTION_RULES.get(portfolio_type)
     if not rules:
         print(f"錯誤：找不到 '{portfolio_type}' 的規則。")
-        return None
+        return None, 0.0
 
-    final_portfolio_df = pd.DataFrame()
-
-    # ======================================================================
-    # 規則 1: 純個股 (Pure Stock)
-    # ======================================================================
+    # ========================== 純個股 (Pure Stock) ==========================
     if portfolio_type == '純個股':
         stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].copy()
         
-        # 1. 根據風險偏好決定因子排序的欄位
         if risk_profile in ['保守型', '穩健型']:
-            # 優先使用 ROE，若無則用殖利率
-            stocks['factor_score'] = stocks['近3年平均ROE(%)'].fillna(stocks['成交價現金殖利率']).fillna(0)
-            print("採用「品質/股利因子」進行排序...")
+            sort_factor = '近3年平均ROE(%)'
+            print(f"採用「{sort_factor}」因子進行排序...")
+            stocks.sort_values(by=sort_factor, ascending=False, inplace=True)
         else: # 積極型
-            # 優先使用營收成長，若無則用年報酬率
-            stocks['factor_score'] = stocks['累月營收年增(%)'].fillna(stocks['年報酬率(含息)']*100).fillna(0)
-            print("採用「動能因子」進行排序...")
+            sort_factor = '累月營收年增(%)'
+            print(f"採用「{sort_factor}」因子進行排序...")
+            stocks.sort_values(by=sort_factor, ascending=False, inplace=True)
         
-        stocks.sort_values(by='factor_score', ascending=False, inplace=True)
-        
-        # 2. 依產業分散規則挑選標的
-        target_size = min(rules['max_assets'], len(stocks))
         selection = []
         industry_count = {}
         for _, row in stocks.iterrows():
-            if len(selection) >= target_size: break
+            if len(selection) >= rules['max_assets']: break
             industry = row['產業別']
             if industry_count.get(industry, 0) < rules['max_industry_assets']:
                 selection.append(row)
                 industry_count[industry] = industry_count.get(industry, 0) + 1
         
-        if not selection: return None
-        final_portfolio_df = pd.DataFrame(selection)
+        if not selection: return None, 0.0
         
-        # 3. 平均分配權重
+        final_portfolio_df = pd.DataFrame(selection)
         num_assets = len(final_portfolio_df)
         weights = [1 / num_assets] * num_assets
         final_portfolio_df['建議權重'] = [f"{w:.2%}" for w in weights]
+        hhi = calculate_hhi(weights)
         
-        print(f"純個股組合 HHI: {calculate_hhi(weights):.4f}")
+        cols_to_keep = ['代號', '名稱', '產業別', '資產類別', '建議權重']
+        return final_portfolio_df[cols_to_keep], hhi
 
-    # ======================================================================
-    # 規則 2: 純 ETF (Pure ETF)
-    # ======================================================================
+    # ========================== 純 ETF (Pure ETF) ==========================
     elif portfolio_type == '純 ETF':
         etfs = screened_assets[screened_assets['資產類別'] == 'ETF'].copy()
-        if len(etfs) < rules['min_assets']: return None
+        if len(etfs) < rules['min_assets']: return None, 0.0
 
-        # 1. 計算夏普比率
-        etfs = etfs[etfs['一年(σ年)'] > 0]
-        etfs['年報酬率(含息)'].fillna(0, inplace=True)
-        etfs['sharpe_ratio'] = (etfs['年報酬率(含息)'] - config.RISK_FREE_RATE) / (etfs['一年(σ年)'] / 100)
-        etfs.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
+        etfs_calc = etfs[etfs['一年(σ年)'] > 0].copy()
+        etfs_calc['sharpe_ratio'] = (etfs_calc['年報酬率(含息)'].fillna(0) - config.RISK_FREE_RATE) / (etfs_calc['一年(σ年)'] / 100)
+        etfs_calc.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
 
-        # 2. 依類型分散挑選
-        selection = []
-        # 優先選一支大盤型 ETF
-        large_cap = etfs[etfs['產業別'] == '國內成分股ETF'].head(1)
-        if not large_cap.empty: selection.append(large_cap.iloc[0])
-        # 再選一支非大盤、非債券的產業/主題型 ETF
-        others = etfs[~etfs['產業別'].isin(['國內成分股ETF', '債券ETF'])].head(1)
-        if not others.empty: selection.append(others.iloc[0])
-        # 如果是保守型，務必納入一支債券ETF
+        selection_df = pd.DataFrame()
         if risk_profile == '保守型':
-            bond = etfs[etfs['產業別'] == '債券ETF'].head(1)
-            if not bond.empty: selection.append(bond.iloc[0])
+            bond_etf = etfs_calc[etfs_calc['產業別'] == '債券ETF'].head(1)
+            stock_etf = etfs_calc[etfs_calc['產業別'] == '國內成分股ETF'].head(1)
+            if not bond_etf.empty: selection_df = pd.concat([selection_df, bond_etf])
+            if not stock_etf.empty: selection_df = pd.concat([selection_df, stock_etf])
+            weights = [0.6, 0.4] if len(selection_df) == 2 else [1.0]
+        else: # 穩健型與積極型
+            target_size = 2 if risk_profile == '積極型' else 4
+            selection_df = etfs_calc.head(min(target_size, len(etfs_calc)))
+            weights = [1 / len(selection_df)] * len(selection_df)
         
-        # 如果數量不足，從剩下的補齊
-        remaining_etfs = etfs.drop(index=[s.name for s in selection if s is not None])
-        needed = rules['min_assets'] - len(selection)
-        if needed > 0: selection.extend([row for _, row in remaining_etfs.head(needed).iterrows()])
+        if selection_df.empty: return None, 0.0
         
-        if not selection: return None
-        final_portfolio_df = pd.DataFrame(selection)
-        
-        # 3. 依風險偏好分配權重
-        num_assets = len(final_portfolio_df)
-        if risk_profile == '保守型' and any(final_portfolio_df['產業別'] == '債券ETF'):
-            weights = [0.6 if etf_type == '債券ETF' else 0.4 / (num_assets - 1) for etf_type in final_portfolio_df['產業別']]
-        else: # 穩健型與積極型暫採平均分配
-            weights = [1 / num_assets] * num_assets
+        final_portfolio_df = selection_df
         final_portfolio_df['建議權重'] = [f"{w:.2%}" for w in weights]
+        hhi = calculate_hhi(weights)
+        
+        cols_to_keep = ['代號', '名稱', '產業別', '資產類別', '建議權重', 'sharpe_ratio']
+        final_cols = [col for col in cols_to_keep if col in final_portfolio_df.columns]
+        return final_portfolio_df[final_cols], hhi
 
-    # ======================================================================
-    # 規則 3: 混合型 (Mixed)
-    # ======================================================================
+    # ========================== 混合型 (Mixed) ==========================
     elif portfolio_type == '混合型':
-        stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].copy()
-        etfs = screened_assets[screened_assets['資產類別'] == 'ETF'].copy()
-
         # 1. 建構核心部位 (ETF)
-        core_selection = etfs[etfs['一年(σ年)'] > 0]
-        core_selection['sharpe_ratio'] = (core_selection['年報酬率(含息)'].fillna(0) - config.RISK_FREE_RATE) / (core_selection['一年(σ年)'] / 100)
-        core_selection.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
-        core_df = core_selection.head(rules['core_etfs'])
+        etfs = screened_assets[screened_assets['資產類別'] == 'ETF'].copy()
+        etfs_calc = etfs[etfs['一年(σ年)'] > 0].copy()
+        etfs_calc['sharpe_ratio'] = (etfs_calc['年報酬率(含息)'].fillna(0) - config.RISK_FREE_RATE) / (etfs_calc['一年(σ年)'] / 100)
+        etfs_calc.sort_values(by='sharpe_ratio', ascending=False, inplace=True)
+        core_df = etfs_calc.head(rules['core_etfs'])
 
         # 2. 建構衛星部位 (個股)
+        stocks = screened_assets[screened_assets['資產類別'] == '上市櫃股票'].copy()
         if risk_profile in ['保守型', '穩健型']:
-            stocks['factor_score'] = stocks['近3年平均ROE(%)'].fillna(0)
+            stocks.sort_values(by='近3年平均ROE(%)', ascending=False, inplace=True)
         else:
-            stocks['factor_score'] = stocks['累月營收年增(%)'].fillna(0)
-        stocks.sort_values(by='factor_score', ascending=False, inplace=True)
+            stocks.sort_values(by='累月營收年增(%)', ascending=False, inplace=True)
         
         satellite_selection = []
         industry_count = {}
@@ -133,19 +112,19 @@ def build_portfolio(screened_assets, portfolio_type, risk_profile, master_df):
                 industry_count[industry] = industry_count.get(industry, 0) + 1
         satellite_df = pd.DataFrame(satellite_selection)
         
-        if core_df.empty or satellite_df.empty: return None
+        if core_df.empty or satellite_df.empty: return None, 0.0
 
         # 3. 整合與分配權重
         core_weight, satellite_weight = rules['core_weight'], 1 - rules['core_weight']
-        core_df['建議權重'] = [f"{(core_weight / len(core_df)):.2%}"] * len(core_df)
-        satellite_df['建議權重'] = [f"{(satellite_weight / len(satellite_df)):.2%}"] * len(satellite_df)
+        core_df['建議權重'] = f"{(core_weight / len(core_df)):.2%}"
+        satellite_df['建議權重'] = f"{(satellite_weight / len(satellite_df)):.2%}"
         
         final_portfolio_df = pd.concat([core_df, satellite_df], ignore_index=True)
         all_weights = [core_weight/len(core_df)]*len(core_df) + [satellite_weight/len(satellite_df)]*len(satellite_df)
-        print(f"混合型組合 HHI: {calculate_hhi(all_weights):.4f}")
+        hhi = calculate_hhi(all_weights)
+        
+        cols_to_keep = ['代號', '名稱', '產業別', '資產類別', '建議權重']
+        final_cols = [col for col in cols_to_keep if col in final_portfolio_df.columns]
+        return final_portfolio_df[final_cols], hhi
 
-    # 回傳結果前，只保留需要的欄位
-    cols_to_keep = ['代號', '名稱', '產業別', '資產類別', '建議權重']
-    final_cols = [col for col in cols_to_keep if col in final_portfolio_df.columns]
-    
-    return final_portfolio_df[final_cols]
+    return None, 0.0
