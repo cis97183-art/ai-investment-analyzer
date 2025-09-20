@@ -1,4 +1,4 @@
-# app.py
+# app.py (最終修正版)
 
 import streamlit as st
 import config
@@ -8,7 +8,6 @@ import investment_analyzer
 
 # --- Streamlit App 介面設定 ---
 
-# 1. 設定頁面標題與佈局
 st.set_page_config(
     page_title="AI 投資組合分析師",
     page_icon="🤖",
@@ -18,26 +17,33 @@ st.set_page_config(
 st.title("🤖 AI 投資組合分析師")
 st.write("根據您的風險偏好，從台股市場中篩選標的並建立客製化投資組合。")
 
-# 2. 建立側邊欄，讓使用者輸入選項
+# --- 側邊欄，讓使用者輸入選項 ---
 st.sidebar.header("請選擇您的偏好")
 
 risk_profile = st.sidebar.selectbox(
     "1. 您的風險偏好是？",
     ("保守型", "穩健型", "積極型"),
-    index=1  # 預設選項為 '穩健型'
+    index=1
 )
 
 portfolio_type = st.sidebar.selectbox(
     "2. 您想建立的組合類型是？",
     ("純個股", "純 ETF", "混合型"),
-    index=0 # 預設選項為 '純個股'
+    index=0
 )
 
-# 3. 建立一個按鈕來觸發分析
-if st.sidebar.button("🚀 開始分析"):
-    # --- 執行分析流程 ---
+# *** 新增點：讓使用者選擇優化策略 ***
+# 這個選項只在選擇「純個股」時出現
+optimization_strategy = "平均權重" # 預設值
+if portfolio_type == '純個股':
+    optimization_strategy = st.sidebar.selectbox(
+        "3. 請選擇個股優化策略",
+        ("平均權重", "夏普比率優化", "因子加權")
+    )
 
-    # 使用 st.spinner 可以在處理資料時顯示讀取動畫，優化使用者體驗
+# --- 觸發分析的按鈕 ---
+if st.sidebar.button("🚀 開始分析"):
+    
     with st.spinner("正在讀取與清理最新市場資料..."):
         master_df = data_loader.load_and_prepare_data(
             listed_path=config.LISTED_STOCK_PATH,
@@ -63,18 +69,19 @@ if st.sidebar.button("🚀 開始分析"):
             st.subheader(f"【{risk_profile}】標的池 (已依輔助指標排序)")
             st.dataframe(screened_pool[['代號', '名稱', '產業別', '市值(億)', '一年(β)', '一年(σ年)']].head(20))
             
-            with st.spinner(f"正在為您建構【{portfolio_type}】投資組合..."):
+            with st.spinner(f"正在為您建構【{portfolio_type} / {optimization_strategy}】投資組合..."):
+                # *** 修正點：將 optimization_strategy 參數傳入函式中 ***
                 final_portfolio = investment_analyzer.build_portfolio(
                     screened_assets=screened_pool,
                     portfolio_type=portfolio_type,
+                    optimization_strategy=optimization_strategy, # <--- 新增的參數
                     master_df=master_df
                 )
 
             if final_portfolio is not None:
-                st.subheader(f"✅ 您的【{risk_profile} - {portfolio_type}】投資組合建議")
+                st.subheader(f"✅ 您的【{risk_profile} - {portfolio_type} ({optimization_strategy})】投資組合建議")
                 st.dataframe(final_portfolio)
                 
-                # 提供 CSV 下載功能
                 @st.cache_data
                 def convert_df_to_csv(df):
                     return df.to_csv(index=False).encode('utf_8_sig')
@@ -83,7 +90,7 @@ if st.sidebar.button("🚀 開始分析"):
                 st.download_button(
                     label="📥 下載投資組合 (CSV)",
                     data=csv_data,
-                    file_name=f"{risk_profile}_{portfolio_type}_portfolio.csv",
+                    file_name=f"{risk_profile}_{portfolio_type}_{optimization_strategy}_portfolio.csv",
                     mime='text/csv',
                 )
             else:
