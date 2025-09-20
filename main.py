@@ -1,4 +1,4 @@
-# main.py (最終簡化版)
+# main.py
 
 import config
 import data_loader

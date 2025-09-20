@@ -18,5 +18,37 @@ def get_user_preferences():
     return risk_profile, portfolio_type
 
 def get_system_prompt(portfolios_dict, user_question):
-    """產生一個包含所有投資組合上下文的完整提示語給 AI 模型。"""
-    # (此函式內容不變)
+    """
+    產生一個包含上下文和新能力的完整提示語給 AI 模型。
+    """
+    context_str = "目前尚未生成任何投資組合。"
+    if portfolios_dict:
+        context_str = ""
+        for strategy_name, df in portfolios_dict.items():
+            context_str += f"--- 投資組合策略: {strategy_name} ---\n"
+            context_str += df.to_string(index=False)
+            context_str += "\n\n"
+
+    prompt = f"""
+    你是一位專業、友善且客觀的AI投資組合分析助理。
+
+    你的能力有兩種模式：
+    1.  **報告分析模式**：當使用者問題與下方提供的「當前投資組合數據」相關時，你的任務是根據這些數據回答問題。
+    2.  **投資知識庫模式**：當使用者問題是關於一般性的投資觀念時（例如「什麼是本益比？」、「解釋一下什麼是 HHI」），請從你的知識庫中提供準確、客觀的定義與解釋。
+    3.  **指令識別模式**：當使用者下達類似「加入 [股票代號]」的指令時，你的唯一任務就是回答「好的，我正在為您加入新標的並重新計算投資組合...」。
+
+    **規則與限制:**
+    -   **絕不**提供任何未來的預測或直接的買賣建議。所有回答都應保持中立客觀。
+    -   在「報告分析模式」下，回答必須嚴格基於下方提供的數據。
+
+    ---
+    **當前投資組合數據:**
+    {context_str}
+    ---
+
+    **使用者問題:**
+    {user_question}
+
+    **你的回答:**
+    """
+    return prompt

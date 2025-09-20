@@ -34,9 +34,6 @@ SCREENING_RULES = {
     }
 }
 
-# ==================================
-# 規則二：投資組合建構規則
-# ==================================
 PORTFOLIO_CONSTRUCTION_RULES = {
     '純個股': {
         'min_assets': 5,
@@ -52,6 +49,7 @@ PORTFOLIO_CONSTRUCTION_RULES = {
         'core_etfs': 2,
         'satellite_stocks': 5,
         'core_weight': 0.7,
-        'hhi_limit': 0.3
+        'hhi_limit': 0.3,
+        'max_industry_assets': 2 # *** 新增點：補上衛星部位的產業分散規則 ***
     }
 }
