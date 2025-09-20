@@ -10,10 +10,11 @@ ETF_PATH = 'ETFALL.xlsx'
 # --- 核心數據清理與轉換函數 ---
 def clean_numeric_column(series: pd.Series) -> pd.Series:
     """
-    【V7.0 修正版】將欄位轉換為數值型態，並處理無效值 (如逗號、百分比)
+    【V7.1 強化版】將欄位轉換為數值型態，並處理無效值 (如逗號、百分比、前後空格)
     """
-    # V7.0 修正: 新增 .str.replace('%', '') 來移除百分比符號
-    return pd.to_numeric(series.astype(str).str.replace(',', '').str.replace('%', ''), errors='coerce')
+    # V7.1 強化: 新增 .str.strip() 移除前後可能存在的空格，讓清理更徹底
+    cleaned_series = series.astype(str).str.replace(',', '').str.replace('%', '').str.strip()
+    return pd.to_numeric(cleaned_series, errors='coerce')
 
 def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
     """標準化欄位名稱，移除特殊字元並統一命名"""
