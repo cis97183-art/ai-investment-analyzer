@@ -1,4 +1,4 @@
-# app.py (狀態管理優化版)
+# app.py (UI/UX 優化版)
 
 import streamlit as st
 import pandas as pd
@@ -12,24 +12,26 @@ import ai_helper
 # --- 頁面設定與狀態初始化 ---
 st.set_page_config(page_title="AI 投資組合分析師", page_icon="🤖", layout="wide")
 
-# 在腳本最上方初始化 session_state，確保它們存在
 if "portfolios" not in st.session_state:
     st.session_state.portfolios = {}
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 側邊欄 (使用者輸入) ---
+# --- 主標題 ---
+st.title("🤖 AI 投資組合分析師")
+st.write("根據您的風險偏好，從台股市場中篩選標的並建立客製化投資組合。")
+
+# --- 側邊欄 ---
 st.sidebar.header("請選擇您的偏好")
-risk_profile = st.sidebar.selectbox("1. 您的風險偏好是？", ("保守型", "穩健型", "積極型"), index=1)
+risk_profile = st.sidebar.selectbox("1. 您的風險偏好是？", ("保守型", "穩健型", "積極型"), index=2) # 預設改為積極型方便測試
 portfolio_type = st.sidebar.selectbox("2. 您想建立的組合類型是？", ("純個股", "純 ETF", "混合型"), index=0)
 total_investment = st.sidebar.number_input(
     "3. 請輸入您的總投資金額 (元)", 
     min_value=10000, value=1000000, step=10000
 )
 
-# --- 按鈕：只負責觸發分析與更新狀態 ---
+# --- 按鈕觸發分析 ---
 if st.sidebar.button("🚀 開始分析"):
-    # 清空舊的分析結果與聊天記錄
     st.session_state.portfolios = {}
     st.session_state.messages = []
     
@@ -41,27 +43,38 @@ if st.sidebar.button("🚀 開始分析"):
         )
     
     if master_df is not None:
-        st.session_state.master_df = master_df # 將 master_df 也存入 state
+        st.session_state.master_df = master_df
         with st.spinner(f"正在為您篩選【{risk_profile}】的標的..."):
             screened_pool = screener.screen_assets(
                 data_df=master_df, risk_profile=risk_profile, target_count=config.TARGET_ASSET_COUNT
             )
-            st.session_state.screened_pool = screened_pool # 儲存篩選結果
+            st.session_state.screened_pool = screened_pool
     else:
         st.error("資料載入失敗，請檢查檔案路徑或檔案內容。")
 
-# --- 主頁面顯示區：根據 session_state 的內容來決定顯示什麼 ---
+# --- 主頁面顯示區 ---
 
-# 只有當 screened_pool 在 session_state 中且不為空時，才顯示報告區
+# 只有當分析完成後才顯示報告
 if "screened_pool" in st.session_state and not st.session_state.screened_pool.empty:
-    st.success("資料準備完成！")
+    st.success("分析完成！")
     
-    # 顯示篩選池
-    st.subheader(f"【{risk_profile}】階層式篩選標的池 (共 {len(st.session_state.screened_pool)} 支)")
-    st.dataframe(st.session_state.screened_pool[['代號', '名稱', '產業別', '篩選層級', '市值(億)', '一年(β)', '一年(σ年)']].head(20))
-    
+    # *** 修正點 1 & 3: 將標的池放入 expander 並增加顯示欄位 ***
+    with st.expander(f"查看【{risk_profile}】階層式篩選標的池 (共 {len(st.session_state.screened_pool)} 支)"):
+        # 定義要顯示的欄位列表
+        pool_display_cols = [
+            '代號', '名稱', '產業別', '篩選層級', 
+            '一年(σ年)', '一年(β)', '累月營收年增(%)', 
+            '市值(億)', '最新單季ROE(%)'
+        ]
+        # 篩選出實際存在的欄位，避免因資料不齊全而報錯
+        existing_cols = [col for col in pool_display_cols if col in st.session_state.screened_pool.columns]
+        st.dataframe(st.session_state.screened_pool[existing_cols])
+
     # 生成並顯示投資組合報告
+    st.markdown("---") # 分隔線
+    
     strategies_to_run = ['平均權重', '夏普比率優化', '排名加權'] if portfolio_type == '純個股' else ['平均權重']
+    
     for strategy in strategies_to_run:
         final_portfolio = investment_analyzer.build_portfolio(
             screened_assets=st.session_state.screened_pool, portfolio_type=portfolio_type,
@@ -85,19 +98,20 @@ if "screened_pool" in st.session_state and not st.session_state.screened_pool.em
 
             st.session_state.portfolios[strategy] = final_portfolio
     
-    # 當報告生成後，檢查並加入 AI 的第一則歡迎訊息
+    # AI 歡迎訊息
     if not st.session_state.messages:
         st.session_state.messages.append({"role": "assistant", "content": "您的客製化投資組合報告已生成，請問針對這些報告內容，有什麼想深入了解的嗎？"})
 
-# 如果沒有報告，顯示預設提示
-elif "screened_pool" not in st.session_state:
+elif "screened_pool" in st.session_state and st.session_state.screened_pool.empty:
+     st.warning(f"在【{risk_profile}】的篩選條件下，找不到任何符合的標的。")
+else:
     st.info("請在左方側邊欄設定您的偏好，然後點擊「開始分析」。")
 
-st.divider()
-
 # --- 聊天室介面 ---
+st.divider()
 st.subheader("🤖 AI 投資組合問答")
 
+# *** 修正點 2: 將聊天紀錄和輸入框都放在報告下方 ***
 # 顯示歷史對話訊息
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
