@@ -1,4 +1,4 @@
-# data_loader.py (已修正版本)
+# data_loader.py (修正版)
 
 import pandas as pd
 import numpy as np
@@ -9,7 +9,8 @@ def clean_stock_data(file_path, file_name):
     """
     print(f"--- 開始處理【{file_name}】---")
     try:
-        df = pd.read_csv(file_path, encoding='cp950')
+        # *** 修正點：將編碼從 'cp950' 改為 'utf-8' ***
+        df = pd.read_csv(file_path, encoding='utf-8')
         print(f"成功讀取檔案: {file_path}")
     except FileNotFoundError:
         print(f"錯誤：找不到檔案 {file_path}，請確認檔案路徑是否正確。")
@@ -51,7 +52,7 @@ def clean_etf_data(file_path):
         return None
 
     original_cols = df.columns.tolist()
-    new_cols = [col.replace('...', '', regex=False).replace('.張.', '', regex=False).replace('.億.', '', regex=False) for col in original_cols]
+    new_cols = [col.replace('...', '').replace('.張.', '').replace('.億.', '').replace('.x', '').replace('.y', '') for col in original_cols]
     df.columns = new_cols
     print("欄位名稱清理完成。")
 
@@ -85,28 +86,21 @@ def load_and_prepare_data(listed_path, otc_path, etf_path):
         print("有部分資料檔案處理失敗，無法繼續。")
         return None
 
-    # 在合併前，新增資產類別並統一關鍵欄位名稱
     df_listed['資產類別'] = '上市櫃股票'
     df_otc['資產類別'] = '上市櫃股票'
     df_etf['資產類別'] = 'ETF'
     
-    # *** 這裡是本次修正的關鍵 ***
-    # 1. 將 '代碼.y' 重新命名為 '代號'
-    # 2. 為了避免與股票欄位混淆，將ETF特有的β和σ欄位也重新命名
     df_etf.rename(columns={
         '代碼.y': '代號',
         '市值.億.': '市值(億)',
         '一年.β.': '一年(β)',
-        '三年.σ年.': '一年(σ年)' 
+        '三年.σ年.': '一年(σ年)'
     }, inplace=True)
     
-    # 3. 刪除用不到且可能造成混淆的 '代碼.x' 欄位
     if '代碼.x' in df_etf.columns:
         df_etf.drop(columns=['代碼.x'], inplace=True)
         print("已修正 ETF 資料：使用 '代碼.y' 作為代號，並移除 '代碼.x'。")
 
-
-    # 合併三個 DataFrame
     master_df = pd.concat([df_listed, df_otc, df_etf], ignore_index=True)
     master_df['代號'] = master_df['代號'].astype(str)
 
