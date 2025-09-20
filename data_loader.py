@@ -5,8 +5,8 @@ import os
 # --- 常數設定 ---
 LISTED_STOCKS_PATH = 'listed stock. without etfcsv.csv'
 OTC_STOCKS_PATH = 'OTC without etf.csv'
-# V4.0 修正: 將檔案名稱與路徑完全對應您上傳的CSV檔案
-ETF_PATH = 'ETFALL.xlsx - merged_stock_data.csv' 
+# V5.0 修正: 將檔案路徑指回原始上傳的 .xlsx 檔案，並使用 read_excel 讀取
+ETF_PATH = 'ETFALL.xlsx' 
 
 # --- 核心數據清理與轉換函數 ---
 def clean_numeric_column(series: pd.Series) -> pd.Series:
@@ -61,9 +61,9 @@ def standardize_column_names(df: pd.DataFrame) -> pd.DataFrame:
 # --- 主要數據加載與整合函數 ---
 @st.cache_data
 def load_all_data_from_csvs():
-    """從多個CSV檔案加載、清理並整合所有數據"""
+    """從多個CSV/Excel檔案加載、清理並整合所有數據"""
     try:
-        # 讀取上市櫃股票資料
+        # 讀取上市櫃股票資料 (CSV)
         listed_df = pd.read_csv(LISTED_STOCKS_PATH, encoding='utf-8')
         otc_df = pd.read_csv(OTC_STOCKS_PATH, encoding='utf-8')
         stocks_df = pd.concat([listed_df, otc_df], ignore_index=True)
@@ -85,8 +85,8 @@ def load_all_data_from_csvs():
         if 'stock_id' in stocks_df.columns:
             stocks_df['stock_id'] = stocks_df['stock_id'].astype(str)
 
-        # V4.0 修正: 使用 pd.read_csv 讀取 ETF 的 CSV 檔案
-        etfs_df = pd.read_csv(ETF_PATH, encoding='utf-8')
+        # V5.0 修正: 使用 pd.read_excel 讀取 ETF 的 .xlsx 檔案
+        etfs_df = pd.read_excel(ETF_PATH)
         etfs_df = standardize_column_names(etfs_df)
         
         # 定義並清理ETF數據中的數值欄位
