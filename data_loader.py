@@ -1,4 +1,4 @@
-# data_loader.py (修正版)
+# data_loader.py (最終修正版 for Excel)
 
 import pandas as pd
 import numpy as np
@@ -9,7 +9,6 @@ def clean_stock_data(file_path, file_name):
     """
     print(f"--- 開始處理【{file_name}】---")
     try:
-        # *** 修正點：將編碼從 'cp950' 改為 'utf-8' ***
         df = pd.read_csv(file_path, encoding='utf-8')
         print(f"成功讀取檔案: {file_path}")
     except FileNotFoundError:
@@ -38,12 +37,13 @@ def clean_stock_data(file_path, file_name):
 
 def clean_etf_data(file_path):
     """
-    專門讀取並清理 ETF 資料的函式。
+    專門讀取並清理 ETF 資料的函式 (現在使用 read_excel)。
     """
     print(f"--- 開始處理【ETF 資料】---")
     try:
-        df = pd.read_csv(file_path, encoding='utf-8')
-        print(f"成功讀取檔案: {file_path}")
+        # *** 修正點：將 pd.read_csv 改為 pd.read_excel ***
+        df = pd.read_excel(file_path)
+        print(f"成功讀取 Excel 檔案: {file_path}")
     except FileNotFoundError:
         print(f"錯誤：找不到檔案 {file_path}，請確認檔案路徑是否正確。")
         return None
@@ -51,6 +51,7 @@ def clean_etf_data(file_path):
         print(f"讀取檔案時發生錯誤: {e}")
         return None
 
+    # Excel 讀取進來後，後續的清理流程與之前相同
     original_cols = df.columns.tolist()
     new_cols = [col.replace('...', '').replace('.張.', '').replace('.億.', '').replace('.x', '').replace('.y', '') for col in original_cols]
     df.columns = new_cols
