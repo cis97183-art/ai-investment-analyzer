@@ -4,35 +4,28 @@ import pandas as pd
 import numpy as np
 from portfolio_rules import UNIVERSAL_EXCLUSION_RULES, STOCK_SCREENING_RULES, ETF_SCREENING_RULES
 
+# 保持不變
 def _to_numeric(series):
-    """輔助函式：將 Series 轉換為數值型態，錯誤則轉為 NaN"""
-    # 針對可能包含百分比的欄位進行處理
-    if series.dtype == 'object':
-        # 移除 '%' 和 ',' 符號
-        series = series.str.replace('%', '', regex=False).str.replace(',', '', regex=False)
     return pd.to_numeric(series, errors='coerce')
 
+# 保持不變
 def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
-    """實施規則零：基礎排雷篩選"""
     print("--- 步驟 1: 執行基礎排雷篩選 (規則零) ---")
     df_filtered = df.copy()
     initial_count = len(df_filtered)
-
-    # 1. 排除槓桿/反向型ETF
+    
     exclude_types = UNIVERSAL_EXCLUSION_RULES['exclude_etf_types']
     etf_mask = df_filtered['資產類別'] == 'ETF'
     type_mask = df_filtered['產業別'].isin(exclude_types)
     df_filtered = df_filtered[~(etf_mask & type_mask)]
     print(f"排雷 1: 排除槓桿/反向型ETF後，剩下 {len(df_filtered)} 筆")
 
-    # 2. 排除規模過小
     min_cap = UNIVERSAL_EXCLUSION_RULES['min_market_cap_billion']
     df_filtered['市值(億)'] = _to_numeric(df_filtered['市值(億)'])
     df_filtered.dropna(subset=['市值(億)'], inplace=True)
     df_filtered = df_filtered[df_filtered['市值(億)'] >= min_cap]
     print(f"排雷 2: 排除市值小於 {min_cap} 億的標的後，剩下 {len(df_filtered)} 筆")
-
-    # 3. 排除數據不足
+    
     min_years = UNIVERSAL_EXCLUSION_RULES['min_listing_years']
     df_filtered['成立年數'] = _to_numeric(df_filtered['成立年數'])
     df_filtered['成立年齡'] = _to_numeric(df_filtered['成立年齡'])
@@ -40,7 +33,6 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
 
-    # 4. 排除財務惡化
     min_fcf_key = 'min_free_cash_flow_per_share'
     fcf_col = '最新近4Q每股自由金流(元)'
     if min_fcf_key in UNIVERSAL_EXCLUSION_RULES and fcf_col in df_filtered.columns:
@@ -51,36 +43,38 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
         exclude_mask = stock_mask & fcf_mask
         df_filtered = df_filtered[~exclude_mask]
         print(f"排雷 4: 排除近4季每股自由金流為負的個股後，剩下 {len(df_filtered)} 筆")
+    else:
+        print(f"排雷 4: 警告 - 找不到 '{fcf_col}' 欄位或規則，跳過此篩選。")
 
     final_count = len(df_filtered)
     print(f"排雷完成。總共排除了 {initial_count - final_count} 筆標的，最終剩下 {final_count} 筆進入標的池篩選。")
+    
     return df_filtered.drop(columns=['合併年資'], errors='ignore')
 
+# 【核心修正】在 generate_asset_pools 函式中加入詳細的偵錯訊息
 def generate_asset_pools(master_df: pd.DataFrame) -> dict:
-    """對通過排雷的標的進行平行/分類篩選，產出各類標的池"""
     print("\n--- 步驟 2: 建立高品質動態觀察名單 ---")
     df_screened = apply_universal_exclusion_rules(master_df)
     df_stocks = df_screened[df_screened['資產類別'].isin(['上市', '上櫃'])].copy()
     df_etfs = df_screened[df_screened['資產類別'] == 'ETF'].copy()
 
-    # --- A: 個股標的池篩選 (平行偵錯模式) ---
     stock_pools = {}
     
-    # 預處理個股資料，確保所有用於比較的欄位都是數值型態
-    numeric_cols = ['一年(σ年)', '一年(β)', '現金股利連配次數', '最新近4Q每股自由金流(元)', '近3年平均ROE(%)', '累月營收年增(%)', '最新單季ROE(%)']
-    for col in numeric_cols:
-        if col in df_stocks.columns:
-            df_stocks[col] = _to_numeric(df_stocks[col])
-    
-    # 預先計算排名以供使用
+    # 預處理個股資料
+    df_stocks['一年(σ年)'] = _to_numeric(df_stocks['一年(σ年)'])
     df_stocks['std_dev_rank'] = df_stocks['一年(σ年)'].rank(pct=True)
+    df_stocks['一年(β)'] = _to_numeric(df_stocks['一年(β)'])
+    df_stocks['現金股利連配次數'] = _to_numeric(df_stocks['現金股利連配次數'])
+    df_stocks['最新近4Q每股自由金流(元)'] = _to_numeric(df_stocks['最新近4Q每股自由金流(元)'])
+    df_stocks['近3年平均ROE(%)'] = _to_numeric(df_stocks['近3年平均ROE(%)'])
+    df_stocks['累月營收年增(%)'] = _to_numeric(df_stocks['累月營收年增(%)'])
 
     for pool_name, rules in STOCK_SCREENING_RULES.items():
         print(f"\n===== 開始偵錯個股標的池: {pool_name} =====")
-        temp_df = df_stocks.copy().dropna(subset=numeric_cols) # 先移除包含空值的行，確保比較順利
+        temp_df = df_stocks.copy()
         conditions = rules['conditions']
         
-        print(f"預處理後，用於篩選的原始個股數量: {len(temp_df)}")
+        print(f"原始個股數量: {len(temp_df)}")
         
         # 逐條檢查篩選條件
         if 'std_dev_rank_max' in conditions:
@@ -120,7 +114,7 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         stock_pools[pool_name] = temp_df.reset_index(drop=True)
         print(f"===== {pool_name} 標的池偵錯完成，最終數量: {len(temp_df)} 筆 =====")
 
-    # --- B: ETF 標的池篩選 (分類) ---
+    # ETF 部分保持不變
     print("\n--- 開始建立 ETF 標的池 ---")
     etf_pools = {}
     for pool_name, rules in ETF_SCREENING_RULES.items():
@@ -136,3 +130,4 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         print(f" -> {pool_name} 標的池建立完成，共 {len(temp_df)} 筆標的。")
         
     return {**stock_pools, **etf_pools}
+
