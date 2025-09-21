@@ -30,21 +30,42 @@ def load_and_preprocess_data():
 
         # --- 欄位重新命名 ---
         # (這一段 mapping 保持不變)
+        # data_loader.py 中的 column_mapping
+
+        # ▼▼▼ 使用這份最終版的 mapping，完整替換掉你舊的 ▼▼▼
         column_mapping = {
-            '市值.億.': 'MarketCap_Billions', '市值(億)': 'MarketCap_Billions',
-            '一年.β.': 'Beta_1Y', '一年(β)': 'Beta_1Y',
-            '一年(σ年)': 'StdDev_1Y',
-            '現金股利連配次數': 'Dividend_Consecutive_Years',
-            '最新近4Q每股自由金流( 元)': 'FCFPS_Last_4Q',
-            '成交價現金殖利率': 'Dividend_Yield',
-            '近3年平均ROE(%)': 'ROE_Avg_3Y',
-            '累月營收年增(%)': 'Revenue_YoY_Accumulated',
-            '最新單季ROE(%)': 'ROE_Latest_Quarter',
-            '產業別': 'Industry',
-            '市價': 'Close',
-            '成立年齡': 'Age_Years',
-            '成立年數': 'Age_Years'
+        # 市值
+        '市值.億.': 'MarketCap_Billions', 
+        '市值(億)': 'MarketCap_Billions',
+
+        # Beta 風險係數
+        '一年.β.': 'Beta_1Y', 
+        '一年(β)': 'Beta_1Y',
+
+        # 標準差波動率
+        '一年(σ年)': 'StdDev_1Y',
+
+        # 配息
+        '現金股利連配次數': 'Dividend_Consecutive_Years',
+        '成交價現金殖利率': 'Dividend_Yield',
+
+        # 每股自由現金流 (本次修正的重點！)
+        '最新近4Q每股自由金流(元)': 'FCFPS_Last_4Q',
+
+        # 獲利能力 ROE
+        '近3年平均ROE(%)': 'ROE_Avg_3Y',
+        '最新單季ROE(%)': 'ROE_Latest_Quarter',
+
+        # 成長性
+        '累月營收年增(%)': 'Revenue_YoY_Accumulated',
+
+        # 其他
+        '產業別': 'Industry',
+        '市價': 'Close', 
+        '成立年齡': 'Age_Years', 
+        '成立年數': 'Age_Years'
         }
+# ▲▲▲ 替換到此結束 ▲▲▲
         master_df = master_df.rename(columns=column_mapping)
 
         # ▼▼▼ 升級版的合併邏輯 ▼▼▼
