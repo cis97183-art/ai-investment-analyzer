@@ -63,7 +63,10 @@ def load_and_preprocess_data():
         '產業別': 'Industry',
         '市價': 'Close', 
         '成立年齡': 'Age_Years', 
-        '成立年數': 'Age_Years'
+        '成立年數': 'Age_Years',
+
+        '內扣費用.保管.管理.': 'Expense_Ratio',  # 假設你的原始欄位名是這樣，請依實際情況調整
+        '年報酬率.含息.': 'Annual_Return_Include_Dividend' # 假設你的原始欄位名是這樣
         }
 # ▲▲▲ 替換到此結束 ▲▲▲
         master_df = master_df.rename(columns=column_mapping)
