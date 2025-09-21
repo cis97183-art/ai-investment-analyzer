@@ -148,24 +148,51 @@ if not st.session_state.portfolio.empty:
     else:
         st.warning("無法生成AI報告。")
 
+    # ▼▼▼ 用這段程式碼，完整替換掉你舊的「標的池檢視器」區塊 ▼▼▼
     st.header("🔬 標的池檢視器 (Pool Viewer)")
+    st.markdown("在這裡，您可以檢視投資策略在各個篩選階段的結果，深入了解標的入選的過程。")
+    
     with st.expander("點擊展開或收合標的池檢視器", expanded=False):
+        # 建立下拉選單 (邏輯不變)
         pool_options = list(st.session_state.data_pools.keys())
         selected_pool_name = st.selectbox("請選擇您想檢視的標的池：", options=pool_options)
+
+        # 根據使用者的選擇，從 session_state 中取出對應的 DataFrame
         pool_to_display = st.session_state.data_pools.get(selected_pool_name)
 
         if pool_to_display is not None and not pool_to_display.empty:
             st.write(f"### {selected_pool_name} ({len(pool_to_display)} 檔標的)")
-            display_cols = [
+            
+            # ▼▼▼ [修改] 動態決定要顯示的欄位 ▼▼▼
+            # 預設的個股欄位組合
+            stock_display_cols = [
                 'StockID', '名稱', 'AssetType', 'Industry', 'MarketCap_Billions',
                 'Close', 'StdDev_1Y', 'Beta_1Y', 'Dividend_Yield',
                 'Dividend_Consecutive_Years', 'ROE_Avg_3Y',
                 'Revenue_YoY_Accumulated', 'FCFPS_Last_4Q', 'Age_Years'
             ]
+            
+            # 為ETF優化的欄位組合
+            etf_display_cols = [
+                'StockID', '名稱', 'AssetType', 'Industry', 'MarketCap_Billions',
+                'Close', 'Beta_1Y', 'Dividend_Yield', 'Age_Years',
+                'Expense_Ratio', 'Annual_Return_Include_Dividend' # <-- 新增的兩個欄位
+            ]
+
+            # 判斷使用者選擇的是否為ETF池
+            if "ETF" in selected_pool_name:
+                display_cols = etf_display_cols
+            else:
+                display_cols = stock_display_cols
+            
+            # 確保要顯示的欄位真的存在於該標的池中
             existing_cols_to_display = [col for col in display_cols if col in pool_to_display.columns]
+            
             st.dataframe(pool_to_display[existing_cols_to_display])
         else:
             st.warning(f"「{selected_pool_name}」是空的，沒有任何標的。")
+    # ▲▲▲ 替換到此結束 ▲▲▲
+
 
     st.header("💬 AI 互動問答")
     for message in st.session_state.messages:
