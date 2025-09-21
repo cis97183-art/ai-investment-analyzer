@@ -9,7 +9,7 @@ import numpy as np
 # 導入自訂模組
 import config
 from data_loader import load_and_preprocess_data
-from investment_analyzer import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio, classify_etf_category
+from investment_analyzer import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio # <--- 移除 classify_etf_category
 from ai_helper import generate_rag_report, get_chat_response
 
 # --- 頁面設定 ---
@@ -34,8 +34,7 @@ def load_data():
         df_stocks = df_filtered[df_filtered['AssetType'] == '個股'].copy()
         df_etf = df_filtered[df_filtered['AssetType'] == 'ETF'].copy()
         stock_pools = create_stock_pools(df_stocks)
-        df_etf_classified = classify_etf_category(df_etf)
-        etf_pools = create_etf_pools(df_etf_classified)
+        etf_pools = create_etf_pools(df_etf)
         return master_df, stock_pools, etf_pools
     return None, None, None
 
@@ -92,39 +91,29 @@ if not st.session_state.portfolio.empty:
         fig_pie = px.pie(portfolio_with_amount, values='Weight', names='名稱', title='權重分佈', hole=.3)
         st.plotly_chart(fig_pie, use_container_width=True)
 
+# app.py -> 視覺化圖表區塊
+
 # ▼▼▼ 用這段程式碼，完整替換掉你舊的 with col2: 區塊 ▼▼▼
     with col2:
         st.subheader("結構分佈")
 
-    # 如果是純ETF組合，顯示ETF類型分佈
-        if portfolio_type == '純ETF':
-        # 確保 ETF_Category 欄位存在
-            if 'ETF_Category' in portfolio_with_amount.columns:
-                etf_summary = portfolio_with_amount.groupby('ETF_Category')['Weight'].sum().reset_index()
-                fig_bar = px.bar(etf_summary, 
-                             x='ETF_Category', 
-                             y='Weight', 
-                             title='ETF 類型資產分佈',
-                             labels={'Weight': '總權重', 'ETF_Category': 'ETF 類型'})
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.warning("無法生成ETF類型分佈圖，缺少分類資料。")
+        # 我們不再區分 ETF 或個股，統一使用 'Industry' 欄位來繪製長條圖
+        # 因為你的資料中，ETF 的 'Industry' 欄位已經是正確的分類了
+        if 'Industry' in portfolio_with_amount.columns:
+            # 排除可能沒有產業分類的標的 (例如某些特殊債券)
+            summary_data = portfolio_with_amount.dropna(subset=['Industry'])
 
-    # 如果是純個股或混合型，且組合中有個股，則顯示產業分佈
-        elif 'Industry' in portfolio_with_amount.columns and not portfolio_with_amount[portfolio_with_amount['AssetType']=='個股'].empty:
-            stock_data = portfolio_with_amount[portfolio_with_amount['AssetType']=='個股']
-            industry_summary = stock_data.groupby('Industry')['Weight'].sum().reset_index()
-            fig_bar = px.bar(industry_summary, 
+            summary = summary_data.groupby('Industry')['Weight'].sum().reset_index()
+
+            fig_bar = px.bar(summary, 
                          x='Industry', 
                          y='Weight', 
-                         title='個股部位產業分佈',
-                         labels={'Weight': '總權重', 'Industry': '產業別'})
+                         title='投資組合結構分佈',
+                         labels={'Weight': '總權重', 'Industry': '類型 / 產業別'})
             st.plotly_chart(fig_bar, use_container_width=True)
-
-    # 都不滿足時的預設情況
         else:
-            st.info("此組合無個股部位，無產業分佈圖可顯示。")
-    # ▲▲▲ 替換結束 ▲▲▲
+            st.info("此組合無產業或類型分佈資料可顯示。")
+# ▲▲▲ 替換結束 ▲▲▲
 
     st.header("📝 AI 深度分析報告")
     if st.session_state.report:

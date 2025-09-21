@@ -5,31 +5,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import config
 
-def classify_etf_category(df_etf):
-    """
-    為ETF DataFrame 新增一個 'ETF_Category' 欄位，用於後續的視覺化分析。
-    """
-    # 定義分類條件
-    # 順序很重要，會從上到下依序判斷
-    conditions = [
-        df_etf['名稱'].str.contains('債', na=False),
-        df_etf['名稱'].str.contains('主動', na=False),
-        df_etf['名稱'].str.contains('美國|S&P|納斯達克|NASDAQ|道瓊|全球|日本|越南|印度|歐洲', na=False),
-    ]
 
-    # 對應的分類標籤
-    categories = [
-        '債券型ETF',
-        '主動式ETF',
-        '國外成分股ETF',
-    ]
 
-    # 使用 np.select 來根據條件賦值，預設值為 '國內成分股ETF'
-    df_etf['ETF_Category'] = np.select(conditions, categories, default='國內成分股ETF')
-
-    print("ETF 類型分類完成。")
-    return df_etf
-# ▲▲▲ 新函式結束 ▲▲▲
 
 def calculate_hhi(weights):
     """計算 HHI 指數"""
