@@ -15,12 +15,18 @@ def apply_factor_weighting(df, factor_column):
     weights = df[factor_column].clip(lower=0.0001)
     return weights / weights.sum()
 
+# 修改後 (請改成這樣)
+
 def run_rule_zero(df):
     """執行基礎排雷篩選"""
     df_filtered = df[~df['名稱'].str.contains('槓桿|反向|正2|反1', na=False)]
     df_filtered = df_filtered[df_filtered['MarketCap_Billions'] >= config.MIN_MARKET_CAP_BILLIONS]
-    min_listing_date = datetime.now() - timedelta(days=config.MIN_LISTING_DAYS)
-    df_filtered = df_filtered[df_filtered['ListingDate'] <= min_listing_date]
+    
+    # vvvv 修改後的篩選邏輯 vvvv
+    # 排除上市/成立未滿一年 (直接檢查 Age_Years 欄位是否 >= 1)
+    df_filtered = df_filtered[df_filtered['Age_Years'] >= 1]
+    # ^^^^ 修改後的篩選邏輯 ^^^^
+
     stock_mask = (df_filtered['AssetType'] == '個股') & (df_filtered['FCFPS_Last_4Q'] < 0)
     df_filtered = df_filtered[~stock_mask]
     return df_filtered

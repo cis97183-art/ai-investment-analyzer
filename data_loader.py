@@ -35,13 +35,23 @@ def load_and_preprocess_data():
         
         # !! 重要 !!: 請根據你實際的 Excel/CSV 欄位名稱微調這裡的 key
         column_mapping = {
-            '市值(億)': 'MarketCap_Billions', '一年標準差': 'StdDev_1Y',
-            '一年Beta': 'Beta_1Y', '現金股利連續發放次數': 'Dividend_Consecutive_Years',
-            '最新近4季每股自由現金流(元)': 'FCFPS_Last_4Q', '成交價現金殖利率': 'Dividend_Yield',
-            '近3年平均ROE(%)': 'ROE_Avg_3Y', '累月營收年增(%)': 'Revenue_YoY_Accumulated',
-            '最新單季ROE(%)': 'ROE_Latest_Quarter', '產業別': 'Industry',
-            '上市/上櫃日期': 'ListingDate', '收盤價': 'Close'
-        }
+        # 你的資料有兩種命名風格，我們全部對應起來
+        '市值.億.': 'MarketCap_Billions',
+        '市值(億)': 'MarketCap_Billions',
+        '一年.β.': 'Beta_1Y',
+        '一年(β)': 'Beta_1Y',
+        '一年(σ年)': 'StdDev_1Y',
+        '現金股利連配次數': 'Dividend_Consecutive_Years',
+        '最新近4Q每股自由金流( 元)': 'FCFPS_Last_4Q', # 注意 '元' 前面有個空格
+        '成交價現金殖利率': 'Dividend_Yield',
+        '近3年平均ROE(%)': 'ROE_Avg_3Y',
+        '累月營收年增(%)': 'Revenue_YoY_Accumulated',
+        '最新單季ROE(%)': 'ROE_Latest_Quarter',
+        '產業別': 'Industry',
+        '市價': 'Close', # 假設 '市價' 就是收盤價
+        '成立年齡': 'Age_Years', # 這是我們要用來取代 ListingDate 的欄位
+        '成立年數': 'Age_Years'  # 這是我們要用來取代 ListingDate 的欄位
+    }
         master_df = master_df.rename(columns=column_mapping)
         
         numeric_cols = [
