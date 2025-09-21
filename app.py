@@ -1,174 +1,144 @@
-# app.py (最終整合版)
+# app.py
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import re
 
-# 匯入專案的核心模組
-import data_loader
-import screener
-import investment_analyzer
-import ai_helper
+# 導入自訂模組
 import config
+from data_loader import load_and_preprocess_data
+from investment_analysis import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio
+from ai_helper import generate_rag_report, get_chat_response
 
-# --- 1. 頁面設定 (Page Configuration) ---
-# 設定瀏覽器頁籤的標題、圖示，並採用寬版佈局
-st.set_page_config(
-    page_title="機構級投資組合建構器",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- 頁面設定 ---
+st.set_page_config(layout="wide", page_title="AI 個人化投資組合分析")
 
-# --- 2. 資料載入與快取 (Data Loading & Caching) ---
-# @st.cache_data 是 Streamlit 的一個強大功能，它會將函式回傳的結果快取起來。
-# 只要輸入參數不變，下次執行時會直接讀取快取，避免耗時的重複資料載入。
-@st.cache_data(show_spinner="正在載入市場資料...")
-def load_data():
-    """
-    載入並準備所有市場資料。
-    """
-    try:
-        master_df = data_loader.load_and_prepare_data(
-            config.LISTED_STOCK_PATH,
-            config.OTC_STOCK_PATH,
-            config.ETF_PATH
-        )
-        return master_df
-    except Exception as e:
-        # 如果載入過程中發生任何錯誤，顯示錯誤訊息並回傳 None
-        st.error(f"載入資料時發生錯誤: {e}")
-        return None
-
-# --- 3. 初始化 Session State ---
-# Session State 是 Streamlit 用來在使用者互動之間保存變數的地方。
-# 例如，使用者點擊按鈕後，計算出來的投資組合會被存放在 st.session_state 中。
-if 'master_df' not in st.session_state:
-    st.session_state.master_df = load_data()
+# --- 初始化 session_state ---
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = pd.DataFrame()
+if 'report' not in st.session_state:
+    st.session_state.report = ""
 if "messages" not in st.session_state:
-    st.session_state.messages = [] # 儲存 AI 聊天紀錄
-if "portfolio_df" not in st.session_state:
-    st.session_state.portfolio_df = None # 儲存計算出的投資組合
-if "candidate_pools" not in st.session_state:
-    st.session_state.candidate_pools = None # 儲存候選標的池
-if "hhi" not in st.session_state:
-    st.session_state.hhi = 0.0 # 儲存 HHI 指數
+    st.session_state.messages = []
+if 'last_inputs' not in st.session_state:
+    st.session_state.last_inputs = {}
 
-# --- 4. 側邊欄使用者輸入 (Sidebar for User Inputs) ---
+# --- 數據載入 (加入快取) ---
+@st.cache_data(ttl=3600) # 快取數據1小時
+def load_data():
+    master_df = load_and_preprocess_data()
+    if master_df is not None:
+        df_filtered = run_rule_zero(master_df)
+        df_stocks = df_filtered[df_filtered['AssetType'] == '個股'].copy()
+        df_etf = df_filtered[df_filtered['AssetType'] == 'ETF'].copy()
+        stock_pools = create_stock_pools(df_stocks)
+        etf_pools = create_etf_pools(df_etf)
+        return master_df, stock_pools, etf_pools
+    return None, None, None
+
+master_df, stock_pools, etf_pools = load_data()
+
+# --- 主應用程式介面 ---
+st.title("🤖 AI 個人化投資組合分析報告 (v2.0)")
+st.markdown("遵循「結構優先，紀律至上」的理念，為您量身打造專業級的投資組合。")
+
+# --- 使用者輸入介面 (側邊欄) ---
 with st.sidebar:
-    st.image("https://storage.googleapis.com/gweb-uniblog-publish-prod/images/gemini_update_blog_announcement_animation_2.gif", use_column_width=True)
-    st.title("投資策略參數")
-    
-    # 【核心簡化】直接使用中文作為選項，因為 portfolio_rules.py 也已更新為使用中文鍵值
-    risk_preference = st.selectbox(
-        label="1. 選擇您的風險偏好",
-        options=["保守型", "穩健型", "積極型"],
-        index=1, # 預設選項為 "穩健型"
-        help="決定了篩選標的與資產配置的核心邏輯。"
-    )
+    st.header("Step 1: 定義您的投資偏好")
+    risk_profile = st.selectbox('風險偏好:', ('保守型', '穩健型', '積極型'), index=1)
+    portfolio_type = st.selectbox('組合類型:', ('純個股', '純ETF', '混合型'), index=0)
+    total_amount = st.number_input('總投資金額 (TWD):', min_value=10000, value=100000, step=10000)
 
-    portfolio_type = st.selectbox(
-        label="2. 選擇組合類型",
-        options=["純個股", "純ETF", "混合型"],
-        index=2, # 預設選項為 "混合型"
-        help="決定了投資組合中包含的資產類型。"
-    )
-
-    analyze_button = st.button("🚀 開始建構投資組合", type="primary", use_container_width=True)
-
-# --- 5. 主面板 (Main Panel) ---
-st.title("📈 機構級投資組合建構與優化策略")
-st.markdown("---")
-
-# 檢查資料是否成功載入
-if st.session_state.master_df is None:
-    st.warning("資料未能成功載入，請檢查 `config.py` 中的檔案路徑設定後重試。")
-else:
-    # --- 6. 核心邏輯執行 ---
-    # 當使用者點擊按鈕時，才執行分析
-    if analyze_button:
-        with st.spinner("正在執行機構級篩選與建構策略..."):
-            # 步驟一：呼叫 screener 產生所有可能的標的池
-            asset_pools = screener.generate_asset_pools(st.session_state.master_df)
-            # 步驟二：呼叫 investment_analyzer 根據使用者選擇建立最終組合
-            portfolio_df, candidate_pools = investment_analyzer.build_portfolio(
-                asset_pools, 
-                risk_preference, 
-                portfolio_type
-            )
-            
-            # 儲存計算結果到 Session State
-            st.session_state.portfolio_df = portfolio_df
-            st.session_state.candidate_pools = candidate_pools
-            
-            # 計算 HHI 指數
-            if portfolio_df is not None and not portfolio_df.empty:
-                weights = portfolio_df['權重(%)'].values / 100
-                st.session_state.hhi = sum([w**2 for w in weights])
-            else:
-                st.session_state.hhi = 0.0
-        
-        st.success("投資組合建構完成！")
-
-    # --- 7. 結果顯示 ---
-    # 只有在 portfolio_df 存在且不為空時，才顯示結果區塊
-    if st.session_state.portfolio_df is not None and not st.session_state.portfolio_df.empty:
-        st.subheader(f"您的客製化「{risk_preference} - {portfolio_type}」投資組合")
-        
-        col1, col2, col3 = st.columns([1, 1, 2])
-        with col1:
-            st.metric(label="標的數量", value=f"{len(st.session_state.portfolio_df)} 支")
-        with col2:
-            st.metric(label="HHI 集中度指數", value=f"{st.session_state.hhi:.4f}", 
-                      help="指數越低代表越分散。通常低於 0.25 被認為是分散的。")
-        
-        # 繪製圓餅圖
-        with col3:
-            fig = px.pie(st.session_state.portfolio_df, values='權重(%)', names='名稱', 
-                         title='投資組合權重分配', hole=.3)
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig, use_container_width=True)
-            
-        st.dataframe(st.session_state.portfolio_df[['代碼', '名稱', '產業別', '權重(%)', '資產類別']])
-
-        # 顯示候選標的池
-        if st.session_state.candidate_pools:
-            st.markdown("---")
-            st.subheader("觀察名單 (候選標的池)")
-            for pool_name, pool_df in st.session_state.candidate_pools.items():
-                with st.expander(f"查看完整的「{pool_name}」候選標的池 ({len(pool_df)} 筆)"):
-                    st.dataframe(pool_df)
-
-        # --- 8. AI 智慧助理 ---
-        st.markdown("---")
-        st.subheader("🤖 AI 智慧助理")
-        
-        if "GOOGLE_API_KEY" not in st.secrets or not st.secrets["GOOGLE_API_KEY"]:
-            st.warning("尚未在 secrets.toml 中設定 Google API Key，AI 助理功能無法使用。")
+    if st.button('🚀 開始建構 & AI分析', use_container_width=True, type="primary"):
+        if master_df is not None:
+            with st.spinner('AI 引擎正在為您建構組合並撰寫報告...'):
+                # 儲存本次輸入
+                st.session_state.last_inputs = {
+                    'risk': risk_profile, 'type': portfolio_type, 'amount': total_amount
+                }
+                # 建構投資組合
+                st.session_state.portfolio = build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools)
+                if not st.session_state.portfolio.empty:
+                    # 生成AI報告
+                    st.session_state.report = generate_rag_report(risk_profile, portfolio_type, st.session_state.portfolio, master_df)
+                else:
+                    st.session_state.report = ""
+                # 清空聊天紀錄
+                st.session_state.messages = []
         else:
-            # 顯示歷史訊息
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-            # 接收使用者新輸入
-            if prompt := st.chat_input("對這個投資組合有什麼問題嗎？"):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
+            st.error("數據載入失敗，無法執行分析。")
 
-                with st.chat_message("assistant"):
-                    with st.spinner("AI 正在思考中..."):
-                        portfolio_context = {
-                            f"{risk_preference} - {portfolio_type}": st.session_state.portfolio_df
-                        }
-                        response = ai_helper.get_ai_response(
-                            portfolios_dict=portfolio_context,
-                            user_question=prompt,
-                            chat_history=st.session_state.messages
+# --- 結果展示區 ---
+if not st.session_state.portfolio.empty:
+    portfolio_with_amount = st.session_state.portfolio.copy()
+    portfolio_with_amount['Investment_Amount'] = portfolio_with_amount['Weight'] * total_amount
+    if 'Close' in portfolio_with_amount.columns:
+        portfolio_with_amount['Shares_To_Buy (est.)'] = np.floor(portfolio_with_amount['Investment_Amount'] / portfolio_with_amount['Close'])
+
+    st.header("📈 您的個人化投資組合")
+    st.dataframe(portfolio_with_amount[['名稱', 'AssetType', 'Industry', 'Weight', 'Investment_Amount', 'Shares_To_Buy (est.)']].style.format({
+        'Weight': '{:.2%}', 'Investment_Amount': '{:,.0f} 元'
+    }))
+
+    # 視覺化圖表
+    col1, col2 = st.columns(2)
+    with col1:
+        fig_pie = px.pie(portfolio_with_amount, values='Weight', names='名稱', title='權重分佈', hole=.3)
+        st.plotly_chart(fig_pie, use_container_width=True)
+    with col2:
+        stock_data = portfolio_with_amount[portfolio_with_amount['AssetType']=='個股']
+        if not stock_data.empty:
+            industry_summary = stock_data.groupby('Industry')['Weight'].sum().reset_index()
+            fig_bar = px.bar(industry_summary, x='Industry', y='Weight', title='個股產業分佈')
+            st.plotly_chart(fig_bar, use_container_width=True)
+        else:
+            st.info("此組合不含個股，無產業分佈圖。")
+
+    st.header("📝 AI 深度分析報告")
+    if st.session_state.report:
+        st.markdown(st.session_state.report)
+    else:
+        st.warning("無法生成AI報告。")
+
+    # --- 互動式AI聊天機器人 ---
+    st.header("💬 AI 互動問答")
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    if prompt := st.chat_input("對這個投資組合有任何問題嗎？(例：如果我想加入台積電(2330)會如何？)"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("AI 正在思考中..."):
+                # 動態調整功能觸發
+                match = re.search(r"(加入|納入|增加)\s*(\w+)\s*\(?(\d{4,6})\)?", prompt)
+                if match:
+                    stock_name, stock_id = match.group(2), match.group(3)
+                    if stock_id in master_df.index:
+                        st.info(f"偵測到動態調整指令：正在嘗試將 **{stock_name}({stock_id})** 加入組合中...")
+                        stock_to_add = master_df.loc[stock_id]
+                        # 使用最後一次的輸入參數重新建構
+                        inputs = st.session_state.last_inputs
+                        new_portfolio = build_portfolio(
+                            inputs['risk'], inputs['type'], stock_pools, etf_pools, forced_include=stock_to_add
                         )
-                        st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                        # 更新 state
+                        st.session_state.portfolio = new_portfolio
+                        st.session_state.report = generate_rag_report(inputs['risk'], inputs['type'], new_portfolio, master_df)
+                        st.session_state.messages = [] # 清空對話以反映新組合
+                        st.success("投資組合已動態調整！頁面將會刷新以顯示最新結果。")
+                        st.rerun() # 重新整理頁面
+                    else:
+                        response = f"抱歉，在我的資料庫中找不到股票代碼為 {stock_id} 的資料。"
+                else:
+                    response = get_chat_response(st.session_state.messages, prompt, st.session_state.portfolio, master_df)
+                
+                st.markdown(response)
+        st.session_state.messages.append({"role": "assistant", "content": response})
 
-    # 如果點擊按鈕後，沒有產生任何投資組合，則顯示錯誤訊息
-    elif analyze_button:
-        st.error("篩選條件過於嚴格，或市場上暫無符合所有規則的標的，無法建立投資組合。請嘗試調整風險偏好或組合類型。")
+else:
+    st.info("請在左側選擇您的偏好，點擊按鈕開始建構您的投資組合。")

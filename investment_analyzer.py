@@ -1,177 +1,153 @@
-# investment_analyzer.py (已修正 KeyError)
+# investment_analysis.py
 
 import pandas as pd
 import numpy as np
-from portfolio_rules import PORTFOLIO_CONSTRUCTION_RULES
+from datetime import datetime, timedelta
+import config
 
-def _calculate_hhi(weights: list) -> float:
-    """計算 HHI 集中度指數。權重應為 0-1 之間的小數。"""
-    if not weights:
-        return 0.0
-    return sum([w**2 for w in weights])
+def calculate_hhi(weights):
+    """計算 HHI 指數"""
+    return np.sum(np.square(weights))
 
-def _to_numeric(series: pd.Series) -> pd.Series:
-    """輔助函式：將 Series 轉換為數值型態，錯誤則轉為 NaN"""
-    return pd.to_numeric(series, errors='coerce')
+def apply_factor_weighting(df, factor_column):
+    """應用因子加權"""
+    # 處理負數或零因子值，給予一個極小的權重
+    weights = df[factor_column].clip(lower=0.0001)
+    return weights / weights.sum()
 
-def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str) -> (pd.DataFrame, dict):
-    """
-    根據使用者偏好與規則建構最終的投資組合。
-    返回:
-        - portfolio_df: 包含權重的最終投資組合 DataFrame。
-        - candidate_pools: 用於建構此組合的候選標的池字典。
-    """
-    print(f"\n--- 步驟 3: 建構 {risk_preference} 型 {portfolio_type} 投資組合 ---")
+def run_rule_zero(df):
+    """執行基礎排雷篩選"""
+    df_filtered = df[~df['名稱'].str.contains('槓桿|反向|正2|反1', na=False)]
+    df_filtered = df_filtered[df_filtered['MarketCap_Billions'] >= config.MIN_MARKET_CAP_BILLIONS]
+    min_listing_date = datetime.now() - timedelta(days=config.MIN_LISTING_DAYS)
+    df_filtered = df_filtered[df_filtered['ListingDate'] <= min_listing_date]
+    stock_mask = (df_filtered['AssetType'] == '個股') & (df_filtered['FCFPS_Last_4Q'] < 0)
+    df_filtered = df_filtered[~stock_mask]
+    return df_filtered
+
+def create_stock_pools(df_stocks):
+    """建立個股標的池"""
+    pools = {}
+    low_vol_threshold = df_stocks['StdDev_1Y'].quantile(0.30)
+    high_vol_threshold = df_stocks['StdDev_1Y'].quantile(0.70)
+
+    pools['conservative'] = df_stocks[
+        (df_stocks['StdDev_1Y'] <= low_vol_threshold) & (df_stocks['Beta_1Y'] < 1.0) &
+        (df_stocks['Dividend_Consecutive_Years'] > 10) & (df_stocks['FCFPS_Last_4Q'] > 0)
+    ].sort_values(by=['Dividend_Yield', 'MarketCap_Billions'], ascending=[False, False])
+
+    pools['moderate'] = df_stocks[
+        (df_stocks['StdDev_1Y'].between(low_vol_threshold, high_vol_threshold)) &
+        (df_stocks['ROE_Avg_3Y'] > 5) & (df_stocks['Revenue_YoY_Accumulated'] > 0)
+    ].sort_values(by=['ROE_Avg_3Y', 'MarketCap_Billions'], ascending=[False, False])
     
-    rules = PORTFOLIO_CONSTRUCTION_RULES.get(portfolio_type, {}).get(risk_preference)
-    if not rules:
-        print(f"錯誤：在 portfolio_rules.py 中找不到對應 '{portfolio_type}' -> '{risk_preference}' 的建構規則。")
-        return pd.DataFrame(), {}
+    pools['aggressive'] = df_stocks[
+        (df_stocks['StdDev_1Y'] > high_vol_threshold) & (df_stocks['Beta_1Y'] > 1.1) &
+        (df_stocks['Revenue_YoY_Accumulated'] > 15)
+    ].sort_values(by=['Revenue_YoY_Accumulated', 'ROE_Latest_Quarter'], ascending=[False, False])
+    return pools
 
+def create_etf_pools(df_etf):
+    """建立ETF標的池"""
+    pools = {}
+    pools['market_cap'] = df_etf[df_etf['名稱'].str.contains('台灣50|公司治理|S&P 500|市值', na=False)]
+    pools['high_dividend'] = df_etf[df_etf['名稱'].str.contains('高股息|高息', na=False)]
+    pools['theme'] = df_etf[df_etf['名稱'].str.contains('半導體|科技|AI|電動車|綠能', na=False)]
+    pools['gov_bond'] = df_etf[df_etf['名稱'].str.contains('公債|政府債', na=False)]
+    pools['corp_bond'] = df_etf[df_etf['名稱'].str.contains('公司債|投資級', na=False)]
+    return pools
+
+def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced_include=None):
+    """主函數：建構投資組合"""
     portfolio_df = pd.DataFrame()
-    candidate_pools = {}
-    
-    # --- 策略一：純個股組合 ---
+
+    # --- 純個股投資組合 ---
     if portfolio_type == '純個股':
-        source_pool_name = rules['source_pool']
-        source_pool = asset_pools.get(source_pool_name, pd.DataFrame())
-        candidate_pools[source_pool_name] = source_pool
-        
-        if source_pool.empty:
-            print(f"警告: '{source_pool_name}' 候選池為空，無法建立純個股投資組合。")
-            return pd.DataFrame(), candidate_pools
-            
-        num_assets = rules['num_assets'][1]
-        max_per_industry = rules['diversification'].get('max_per_industry', num_assets)
-        
-        selected_stocks = []
-        industry_counts = {}
-        for _, stock in source_pool.iterrows():
-            if len(selected_stocks) >= num_assets:
-                break
-            industry = stock['產業別']
-            if industry_counts.get(industry, 0) < max_per_industry:
-                selected_stocks.append(stock)
-                industry_counts[industry] = industry_counts.get(industry, 0) + 1
-        
-        portfolio_df = pd.DataFrame(selected_stocks)
-        
-        if portfolio_df.empty:
-             return pd.DataFrame(), candidate_pools
+        if risk_profile == '保守型':
+            pool = stock_pools['conservative']
+            count = np.random.randint(*config.CONSERVATIVE_STOCK_COUNT)
+            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count)
+            if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'Dividend_Yield')
+        elif risk_profile == '穩健型':
+            pool = stock_pools['moderate']
+            count = np.random.randint(*config.MODERATE_STOCK_COUNT)
+            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count)
+            if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'ROE_Avg_3Y')
+        elif risk_profile == '積極型':
+            pool = stock_pools['aggressive']
+            count = np.random.randint(*config.AGGRESSIVE_STOCK_COUNT)
+            # 積極型可集中產業
+            portfolio_df = pool.head(count)
+            if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'Revenue_YoY_Accumulated')
 
-        weight_factor = rules.get('weighting_factor')
-        if weight_factor and weight_factor in portfolio_df.columns:
-            portfolio_df[weight_factor] = _to_numeric(portfolio_df[weight_factor])
-            factor_values = portfolio_df[weight_factor].fillna(0.0001)
-            factor_values[factor_values <= 0] = 0.0001
-            total_factor = factor_values.sum()
-            
-            if total_factor > 0:
-                portfolio_df['權重(%)'] = (factor_values / total_factor * 100).round(2)
-            else:
-                 portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
-        else:
-            portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
-
-    # --- 策略二：純ETF組合 ---
+    # --- 純ETF投資組合 ---
     elif portfolio_type == '純ETF':
-        selected_etfs_list = []
-        
-        stock_alloc = rules['asset_allocation']['Stocks']
-        if stock_alloc > 0:
-            stock_pool_names = rules['stock_source_pools']
-            all_stock_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in stock_pool_names], ignore_index=True)
-            
-            if not all_stock_etfs.empty and '代碼' in all_stock_etfs.columns:
-                all_stock_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-                sort_key = '年報酬率.含息.' if risk_preference == '積極型' else '一年(σ年)'
-                ascending = False if risk_preference == '積極型' else True
-                
-                # 【核心修正】排序前先檢查欄位是否存在
-                if sort_key in all_stock_etfs.columns:
-                    candidate_pools['股票ETF'] = all_stock_etfs.sort_values(by=sort_key, ascending=ascending)
-                else:
-                    print(f"警告: ETF資料中缺少 '{sort_key}' 欄位，無法進行排序。")
-                    candidate_pools['股票ETF'] = all_stock_etfs
-                
-                selected_etfs_list.extend(candidate_pools['股票ETF'].head(2).to_dict('records'))
-
-        bond_alloc = rules['asset_allocation']['Bonds']
-        if bond_alloc > 0:
-            bond_pool_names = rules['bond_source_pools']
-            all_bond_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in bond_pool_names], ignore_index=True)
-
-            if not all_bond_etfs.empty and '代碼' in all_bond_etfs.columns:
-                all_bond_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-                
-                # 【核心修正】排序前先檢查欄位是否存在
-                if '一年(σ年)' in all_bond_etfs.columns:
-                    candidate_pools['債券ETF'] = all_bond_etfs.sort_values(by='一年(σ年)')
-                else:
-                    print(f"警告: 債券ETF資料中缺少 '一年(σ年)' 欄位，無法進行排序。")
-                    candidate_pools['債券ETF'] = all_bond_etfs
-
-                selected_etfs_list.extend(candidate_pools['債券ETF'].head(2).to_dict('records'))
-
-        if not selected_etfs_list:
-             return pd.DataFrame(), candidate_pools
-
-        portfolio_df = pd.DataFrame(selected_etfs_list).drop_duplicates(subset=['代碼'])
-        portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
-
-    # --- 策略三：混合型組合 ---
+        if risk_profile == '保守型':
+            alloc = config.CONSERVATIVE_ETF_ALLOC
+            stock_etf = etf_pools['high_dividend'].head(1)
+            bond_etfs = pd.concat([etf_pools['gov_bond'].head(1), etf_pools['corp_bond'].head(1)])
+            portfolio_df = pd.concat([stock_etf, bond_etfs])
+            if not portfolio_df.empty: portfolio_df['Weight'] = [alloc['stocks']/100, (alloc['bonds']/100)*0.6, (alloc['bonds']/100)*0.4]
+        elif risk_profile == '穩健型':
+            alloc = config.MODERATE_ETF_ALLOC
+            core_etf = etf_pools['market_cap'].head(1)
+            theme_etf = etf_pools['theme'].head(1)
+            bond_etf = etf_pools['gov_bond'].head(1)
+            portfolio_df = pd.concat([core_etf, theme_etf, bond_etf])
+            if not portfolio_df.empty: portfolio_df['Weight'] = [(alloc['stocks']/100)*0.7, (alloc['stocks']/100)*0.3, alloc['bonds']/100]
+        elif risk_profile == '積極型':
+            alloc = config.AGGRESSIVE_ETF_ALLOC
+            core_etf = etf_pools['market_cap'].head(1)
+            theme_etfs = etf_pools['theme'].head(2)
+            bond_etf = etf_pools['gov_bond'].head(1)
+            portfolio_df = pd.concat([core_etf, theme_etfs, bond_etf])
+            if not portfolio_df.empty: portfolio_df['Weight'] = [(alloc['stocks']/100)*0.4, (alloc['stocks']/100)*0.25, (alloc['stocks']/100)*0.25, alloc['bonds']/100]
+    
+    # --- 混合型投資組合 ---
     elif portfolio_type == '混合型':
-        core_alloc = rules['core_satellite_split']['core']
-        satellite_alloc = rules['core_satellite_split']['satellite']
-        
-        core_etf_pools_names = rules['core_etf_pools']
-        all_core_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in core_etf_pools_names], ignore_index=True)
-        
-        core_selection = pd.DataFrame()
-        if not all_core_etfs.empty and '代碼' in all_core_etfs.columns:
-            all_core_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-            
-            # 【核心修正】排序前先檢查欄位是否存在
-            if '一年(σ年)' in all_core_etfs.columns:
-                candidate_pools['核心ETF'] = all_core_etfs.sort_values(by='一年(σ年)')
-            else:
-                print(f"警告: 核心ETF資料中缺少 '一年(σ年)' 欄位，無法進行排序。")
-                candidate_pools['核心ETF'] = all_core_etfs
-            
-            core_selection = candidate_pools['核心ETF'].head(2)
+        if risk_profile == '保守型':
+            alloc = config.CONSERVATIVE_HYBRID_ALLOC
+            core = pd.concat([etf_pools['high_dividend'].head(1), etf_pools['gov_bond'].head(1)])
+            core['Weight'] = [0.5, 0.5]
+            satellite = stock_pools['conservative'].head(4)
+            satellite['Weight'] = apply_factor_weighting(satellite, 'Dividend_Yield')
+            portfolio_df = pd.concat([core, satellite])
+            portfolio_df['Weight'] *= np.append(np.full(len(core), alloc['core']/100), np.full(len(satellite), alloc['satellite']/100))
+        elif risk_profile == '穩健型':
+            alloc = config.MODERATE_HYBRID_ALLOC
+            core = etf_pools['market_cap'].head(1)
+            core['Weight'] = 1.0
+            satellite = stock_pools['moderate'].head(4)
+            satellite['Weight'] = apply_factor_weighting(satellite, 'ROE_Avg_3Y')
+            portfolio_df = pd.concat([core, satellite])
+            portfolio_df['Weight'] *= np.append(np.full(len(core), alloc['core']/100), np.full(len(satellite), alloc['satellite']/100))
+        elif risk_profile == '積極型':
+            alloc = config.AGGRESSIVE_HYBRID_ALLOC
+            core = etf_pools['theme'].head(2)
+            core['Weight'] = [0.5, 0.5]
+            satellite = stock_pools['aggressive'].head(3)
+            satellite['Weight'] = apply_factor_weighting(satellite, 'Revenue_YoY_Accumulated')
+            portfolio_df = pd.concat([core, satellite])
+            portfolio_df['Weight'] *= np.append(np.full(len(core), alloc['core']/100), np.full(len(satellite), alloc['satellite']/100))
 
-        satellite_pool_name = rules['satellite_stock_pool']
-        satellite_pool = asset_pools.get(satellite_pool_name, pd.DataFrame())
-        candidate_pools['衛星個股'] = satellite_pool
-        num_satellite = rules['num_satellite_stocks'][1]
-        satellite_selection = candidate_pools['衛星個股'].head(num_satellite)
+    if portfolio_df.empty:
+        return pd.DataFrame()
 
-        portfolio_df = pd.concat([core_selection, satellite_selection], ignore_index=True)
+    # 正規化權重，確保總和為1
+    if portfolio_df['Weight'].sum() > 0:
+        portfolio_df['Weight'] /= portfolio_df['Weight'].sum()
+
+    # 動態調整邏輯：如果使用者強制加入某標的
+    if forced_include is not None:
+        stock_to_add = forced_include.copy()
+        # 給予新加入標的 10% 基礎權重，並從其他標的等比例扣除
+        new_weight = 0.10
+        portfolio_df['Weight'] *= (1 - new_weight)
+        stock_to_add['Weight'] = new_weight
+        portfolio_df = pd.concat([portfolio_df, stock_to_add.to_frame().T])
+        portfolio_df.index.name = 'StockID'
+        portfolio_df = portfolio_df.reset_index().drop_duplicates(subset='StockID', keep='last').set_index('StockID')
+        # 再次正規化
+        portfolio_df['Weight'] /= portfolio_df['Weight'].sum()
         
-        if portfolio_df.empty:
-             return pd.DataFrame(), candidate_pools
-
-        num_core = len(core_selection)
-        num_satellite_actual = len(satellite_selection)
-        
-        if num_core > 0:
-            portfolio_df.loc[core_selection.index, '權重(%)'] = round(core_alloc * 100 / num_core, 2)
-        if num_satellite_actual > 0:
-            portfolio_df.loc[satellite_selection.index, '權重(%)'] = round(satellite_alloc * 100 / num_satellite_actual, 2)
-        
-    else:
-        print(f"錯誤: 不支援的組合類型 '{portfolio_type}'")
-        return pd.DataFrame(), {}
-
-    if not portfolio_df.empty:
-        portfolio_df['權重(%)'].fillna(0, inplace=True)
-        diff = 100 - portfolio_df['權重(%)'].sum()
-        if diff != 0:
-            portfolio_df.loc[portfolio_df.index[0], '權重(%)'] += diff
-        
-        weights = portfolio_df['權重(%)'].values / 100
-        hhi = _calculate_hhi(list(weights))
-        print(f"投資組合建構完成，共 {len(portfolio_df)} 筆標的，HHI值為: {hhi:.4f}")
-
-    return portfolio_df, candidate_pools
-
+    return portfolio_df.sort_values('Weight', ascending=False)

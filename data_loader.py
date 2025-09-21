@@ -1,117 +1,66 @@
-# data_loader.py (最終版 - 處理 Excel + CSV 混合檔案)
+# data_loader.py
 
 import pandas as pd
 import numpy as np
-import io
-import csv
+import config # 導入設定檔
 
-def _read_and_manually_clean_csv(file_path: str, encoding: str = 'cp950') -> pd.DataFrame:
-    """
-    一個極度強健的 CSV 讀取函式，能預先處理檔案中的 NULL byte 和結構性錯誤。
-    """
-    print(f"--- 正在以強健模式讀取並清理 CSV 檔案: {file_path} ---")
+def clean_numeric_column(series):
+    """將欄位轉換為數值型態，處理 '--', 'NA' 等無效值"""
+    return pd.to_numeric(series.astype(str).str.replace(',', '').replace('--', np.nan), errors='coerce')
+
+def load_and_preprocess_data():
+    """模組一：數據整合與預處理引擎"""
     try:
-        with open(file_path, 'rb') as f:
-            content = f.read()
-        cleaned_content = content.replace(b'\x00', b'')
-        
-        string_data = cleaned_content.decode(encoding, errors='replace')
-        string_io_obj = io.StringIO(string_data)
-        
-        reader = csv.reader(string_io_obj)
-        data = list(reader)
-        
-        if not data:
-            return pd.DataFrame()
-            
-        header = data[0]
-        rows = data[1:]
-        
-        header_len = len(header)
-        cleaned_rows = [row for row in rows if len(row) == header_len]
-        
-        if not cleaned_rows:
-             print(f"警告：在 {file_path} 中找不到格式正確的資料行。")
-             return pd.DataFrame(columns=header)
+        df_etf = pd.read_excel(config.ETF_FILE)
+        df_listed = pd.read_csv(config.LISTED_STOCK_FILE)
+        df_otc = pd.read_csv(config.OTC_STOCK_FILE)
 
-        df = pd.DataFrame(cleaned_rows, columns=header)
-        df.columns = df.columns.str.strip()
-        print(f"強健模式讀取成功！共讀取 {len(df)} 筆資料。")
-        return df
+        # ETF 資料處理
+        df_etf = df_etf.rename(columns={'代碼.y': 'StockID', '名稱.y': '名稱'})
+        df_etf = df_etf.drop(columns=['代碼.x', '名稱.x'], errors='ignore')
+        df_etf['AssetType'] = 'ETF'
+
+        # 個股資料處理
+        df_stocks = pd.concat([df_listed, df_otc], ignore_index=True)
+        df_stocks = df_stocks.rename(columns={'代號': 'StockID'})
+        df_stocks['AssetType'] = '個股'
+
+        # 合併資料
+        master_df = pd.concat([df_etf, df_stocks], ignore_index=True)
+        master_df['StockID'] = master_df['StockID'].astype(str).str.strip()
+        master_df = master_df.drop_duplicates(subset='StockID', keep='first')
         
-    except Exception as e:
-        print(f"在讀取並清理檔案 {file_path} 時發生嚴重錯誤: {e}")
-        raise
-
-def _clean_stock_data(df: pd.DataFrame, asset_type: str) -> pd.DataFrame:
-    """
-    清理上市/上櫃股票資料的輔助函式。
-    核心任務：將 '代號' 欄位統一為 '代碼'。
-    """
-    if df.empty: return df
-    
-    df['資產類別'] = asset_type
-    
-    if '代號' in df.columns:
-        df.rename(columns={'代號': '代碼'}, inplace=True)
-    
-    df.replace('--', np.nan, inplace=True)
-    
-    return df
-
-def _clean_etf_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    清理 ETF 資料的輔助函式。
-    核心任務：
-    1. 將 '代碼.y' (正確的ID) 統一為 '代碼'。
-    2. 將 '資產規模.億.' 統一為 '市值(億)'。
-    3. 移除混淆的 '代碼.x' 欄位。
-    """
-    if df.empty: return df
-    
-    df['資產類別'] = 'ETF'
-    
-    if '代碼.y' in df.columns:
-        df.rename(columns={'代碼.y': '代碼'}, inplace=True)
-    
-    if '資產規模.億.' in df.columns:
-        df['市值(億)'] = pd.to_numeric(df['資產規模.億.'], errors='coerce')
-    elif '市值.億.' in df.columns:
-        df['市值(億)'] = pd.to_numeric(df['市值.億.'], errors='coerce')
-
-    cols_to_drop = ['代碼.x', '市值.億.', '資產規模.億.']
-    existing_cols_to_drop = [col for col in cols_to_drop if col in df.columns]
-    if existing_cols_to_drop:
-        df.drop(columns=existing_cols_to_drop, inplace=True)
-
-    df.replace('--', np.nan, inplace=True)
-    
-    return df
-
-def load_and_prepare_data(listed_path: str, otc_path: str, etf_path: str) -> pd.DataFrame:
-    """
-    載入、清理並合併所有資料來源，回傳一個標準化後的 master DataFrame。
-    """
-    try:
-        # 1. 使用 pandas.read_excel 來讀取 ETFALL.xlsx 檔案
-        print(f"--- 正在讀取 Excel 檔案: {etf_path} ---")
-        df_etf_raw = pd.read_excel(etf_path)
-        df_etf = _clean_etf_data(df_etf_raw)
+        # !! 重要 !!: 請根據你實際的 Excel/CSV 欄位名稱微調這裡的 key
+        column_mapping = {
+            '市值(億)': 'MarketCap_Billions', '一年標準差': 'StdDev_1Y',
+            '一年Beta': 'Beta_1Y', '現金股利連續發放次數': 'Dividend_Consecutive_Years',
+            '最新近4季每股自由現金流(元)': 'FCFPS_Last_4Q', '成交價現金殖利率': 'Dividend_Yield',
+            '近3年平均ROE(%)': 'ROE_Avg_3Y', '累月營收年增(%)': 'Revenue_YoY_Accumulated',
+            '最新單季ROE(%)': 'ROE_Latest_Quarter', '產業別': 'Industry',
+            '上市/上櫃日期': 'ListingDate', '收盤價': 'Close'
+        }
+        master_df = master_df.rename(columns=column_mapping)
         
-        # 2. 對於 CSV 檔案，繼續使用強健的自訂讀取函式
-        df_listed = _clean_stock_data(_read_and_manually_clean_csv(listed_path), '上市')
-        df_otc = _clean_stock_data(_read_and_manually_clean_csv(otc_path), '上櫃')
-
-        # 合併三個 DataFrame
-        master_df = pd.concat([df_etf, df_listed, df_otc], ignore_index=True, sort=False)
+        numeric_cols = [
+            'MarketCap_Billions', 'StdDev_1Y', 'Beta_1Y', 'Dividend_Consecutive_Years',
+            'FCFPS_Last_4Q', 'Dividend_Yield', 'ROE_Avg_3Y', 'Revenue_YoY_Accumulated',
+            'ROE_Latest_Quarter', 'Close'
+        ]
         
-        print("\n所有資料載入與標準化完成！最終 Master DataFrame 資訊：")
-        master_df.info(verbose=False)
+        for col in numeric_cols:
+            if col in master_df.columns:
+                master_df[col] = clean_numeric_column(master_df[col])
+        
+        if 'ListingDate' in master_df.columns:
+            master_df['ListingDate'] = pd.to_datetime(master_df['ListingDate'], errors='coerce')
+
+        master_df = master_df.set_index('StockID', drop=False)
+        print("數據整合與清洗完成。")
         return master_df
 
     except FileNotFoundError as e:
-        print(f"錯誤：找不到檔案 {e.filename}。請確認 config.py 中的路徑設定是否正確。")
+        print(f"錯誤：找不到檔案 {e.filename}。")
         return None
     except Exception as e:
-        print(f"在 load_and_prepare_data 中發生錯誤: {e}")
+        print(f"處理數據時發生未預期的錯誤: {e}")
         return None

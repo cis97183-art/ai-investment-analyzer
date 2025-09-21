@@ -1,8 +1,12 @@
-忽略 Python 虛擬環境
+# .gitignore
+
+# 忽略 Python 的快取檔案
+__pycache__/
 venv/
 
-忽略 Streamlit 的 secrets 檔案
-.streamlit/secrets.toml
+# 忽略敏感設定檔
+config.py
 
-忽略本機資料庫檔案
-*.db
+# 其它你需要忽略的檔案...
+*.xlsx
+*.csv
