@@ -1,3 +1,5 @@
+# screener.py (已修正)
+
 import pandas as pd
 import numpy as np
 from portfolio_rules import UNIVERSAL_EXCLUSION_RULES, STOCK_SCREENING_RULES, ETF_SCREENING_RULES
@@ -8,12 +10,10 @@ def _to_numeric(series: pd.Series) -> pd.Series:
     特別處理可能包含 '%' 或 ',' 的 object (文字) 型態欄位。
     """
     if pd.api.types.is_object_dtype(series):
-        # 移除 '%' 和 ',' 符號，再進行轉換
         return pd.to_numeric(
             series.astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False),
             errors='coerce'
         )
-    # 如果已經是數值型態，直接回傳
     return pd.to_numeric(series, errors='coerce')
 
 def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
@@ -34,9 +34,20 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     df_filtered = df_filtered[df_filtered['市值(億)'] >= min_cap]
     print(f"排雷 2: 排除市值小於 {min_cap} 億的標的後，剩下 {len(df_filtered)} 筆")
 
-    # 3. 排除數據不足
+    # 3. 排除數據不足 (核心修正點)
     min_years = UNIVERSAL_EXCLUSION_RULES['min_listing_years']
-    df_filtered['合併年資'] = _to_numeric(df_filtered['成立年數']).fillna(_to_numeric(df_filtered['成立年齡']))
+    
+    # --- 【核心修正】讓合併年資的計算更強健 ---
+    # 步驟 a: 預設合併年資為空值 (NaN)
+    df_filtered['合併年資'] = np.nan
+    # 步驟 b: 如果 '成立年數' 欄位存在，就用它的值
+    if '成立年數' in df_filtered.columns:
+        df_filtered['合併年資'] = _to_numeric(df_filtered['成立年數'])
+    # 步驟 c: 如果 '成立年齡' 欄位存在，用它的值去填補上面可能留下的空值
+    if '成立年齡' in df_filtered.columns:
+        df_filtered['合併年資'].fillna(_to_numeric(df_filtered['成立年齡']), inplace=True)
+    # --- 修正結束 ---
+        
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
 
@@ -112,4 +123,3 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         print(f" -> {pool_name} 標的池建立完成，共 {len(temp_df)} 筆標的。")
         
     return {**stock_pools, **etf_pools}
-
