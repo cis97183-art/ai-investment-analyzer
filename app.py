@@ -18,6 +18,9 @@ st.set_page_config(layout="wide", page_title="AI 個人化投資組合分析")
 # --- 初始化 session_state ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = pd.DataFrame()
+# ▼▼▼ [新增] 初始化 hhi ▼▼▼
+if 'hhi' not in st.session_state:
+    st.session_state.hhi = 0
 if 'report' not in st.session_state:
     st.session_state.report = ""
 if "messages" not in st.session_state:
@@ -78,14 +81,23 @@ with st.sidebar:
                     '投資級公司債ETF池': etf_pools.get('corp_bond', pd.DataFrame())
                 }
                 
-                # 建構投資組合
-                st.session_state.portfolio = build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools)
+                # ▼▼▼ [修改] 接收 build_portfolio 回傳的兩個值 ▼▼▼
+                st.session_state.portfolio, st.session_state.hhi = build_portfolio(
+                    risk_profile, portfolio_type, stock_pools, etf_pools
+                )
+
                 if not st.session_state.portfolio.empty:
-                    # 生成AI報告
-                    st.session_state.report = generate_rag_report(risk_profile, portfolio_type, st.session_state.portfolio, master_df)
+                    # ▼▼▼ [修改] 將 HHI 值傳遞給 AI 報告生成器 ▼▼▼
+                    st.session_state.report = generate_rag_report(
+                        risk_profile, 
+                        portfolio_type, 
+                        st.session_state.portfolio, 
+                        master_df, 
+                        st.session_state.hhi # <-- 傳入 HHI
+                    )
                 else:
                     st.session_state.report = ""
-                # 清空聊天紀錄
+                    st.session_state.hhi = 0
                 st.session_state.messages = []
         else:
             st.error("數據載入失敗，無法執行分析。")
@@ -98,6 +110,10 @@ if not st.session_state.portfolio.empty:
     #     portfolio_with_amount['Shares_To_Buy (est.)'] = np.floor(portfolio_with_amount['Investment_Amount'] / portfolio_with_amount['Close'])
 
     st.header("📈 您的個人化投資組合")
+    st.metric(
+        label="HHI 集中度指數 (越低越分散)",
+        value=f"{st.session_state.hhi:.4f}"
+    )
     st.dataframe(portfolio_with_amount[['名稱', 'AssetType', 'Industry', 'Weight', 'Investment_Amount']].style.format({
         'Weight': '{:.2%}', 'Investment_Amount': '{:,.0f} 元'
     }))

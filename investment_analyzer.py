@@ -67,9 +67,10 @@ def create_etf_pools(df_etf):
     return pools
 
 def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced_include=None):
-    """主函數：建構投資組合"""
+    """主函數：建構投資組合，並回傳 portfolio_df 和 hhi_value"""
     portfolio_df = pd.DataFrame()
 
+    # --- (這裡面所有的 if/elif/else 邏輯都保持不變) ---
     # --- 純個股投資組合 ---
     if portfolio_type == '純個股':
         if risk_profile == '保守型':
@@ -85,12 +86,12 @@ def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced
         elif risk_profile == '積極型':
             pool = stock_pools['aggressive']
             count = np.random.randint(*config.AGGRESSIVE_STOCK_COUNT)
-            # 積極型可集中產業
             portfolio_df = pool.head(count).copy()
             if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'Revenue_YoY_Accumulated')
 
     # --- 純ETF投資組合 ---
     elif portfolio_type == '純ETF':
+        # ... (純ETF的所有邏輯保持不變) ...
         if risk_profile == '保守型':
             alloc = config.CONSERVATIVE_ETF_ALLOC
             stock_etf = etf_pools['high_dividend'].head(1)
@@ -111,9 +112,10 @@ def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced
             bond_etf = etf_pools['gov_bond'].head(1)
             portfolio_df = pd.concat([core_etf, theme_etfs, bond_etf])
             if not portfolio_df.empty: portfolio_df['Weight'] = [(alloc['stocks']/100)*0.4, (alloc['stocks']/100)*0.25, (alloc['stocks']/100)*0.25, alloc['bonds']/100]
-    
+
     # --- 混合型投資組合 ---
     elif portfolio_type == '混合型':
+        # ... (混合型的所有邏輯保持不變) ...
         if risk_profile == '保守型':
             alloc = config.CONSERVATIVE_HYBRID_ALLOC
             core = pd.concat([etf_pools['high_dividend'].head(1), etf_pools['gov_bond'].head(1)])
@@ -139,24 +141,26 @@ def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced
             portfolio_df = pd.concat([core, satellite])
             portfolio_df['Weight'] *= np.append(np.full(len(core), alloc['core']/100), np.full(len(satellite), alloc['satellite']/100))
 
+    # --- (後續處理邏輯) ---
     if portfolio_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), 0 # 如果是空的，HHI 為 0
 
-    # 正規化權重，確保總和為1
     if portfolio_df['Weight'].sum() > 0:
         portfolio_df['Weight'] /= portfolio_df['Weight'].sum()
 
-    # 動態調整邏輯：如果使用者強制加入某標的
     if forced_include is not None:
+        # ... (動態調整邏輯不變) ...
         stock_to_add = forced_include.copy()
-        # 給予新加入標的 10% 基礎權重，並從其他標的等比例扣除
         new_weight = 0.10
         portfolio_df['Weight'] *= (1 - new_weight)
         stock_to_add['Weight'] = new_weight
         portfolio_df = pd.concat([portfolio_df, stock_to_add.to_frame().T])
         portfolio_df.index.name = 'StockID'
         portfolio_df = portfolio_df.reset_index().drop_duplicates(subset='StockID', keep='last').set_index('StockID')
-        # 再次正規化
         portfolio_df['Weight'] /= portfolio_df['Weight'].sum()
-        
-    return portfolio_df.sort_values('Weight', ascending=False)
+
+    # ▼▼▼ [新增] 計算 HHI 並修改回傳值 ▼▼▼
+    final_portfolio = portfolio_df.sort_values('Weight', ascending=False)
+    hhi_value = calculate_hhi(final_portfolio['Weight'])
+
+    return final_portfolio, hhi_value # 回傳兩個值：DataFrame 和 HHI

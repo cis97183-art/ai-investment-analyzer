@@ -25,13 +25,15 @@ except Exception as e:
     st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
-def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df):
-    """模組五：RAG文字報告生成器"""
+# ai_helper.py
+
+# ▼▼▼ 用這個新版本完整替換掉舊的 generate_rag_report 函式 ▼▼▼
+def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, hhi_value): # <-- [修改] 新增 hhi_value 參數
+    """模組五：RAG文字報告生成器 (HHI 增強版)"""
     if llm is None:
         return "AI 模型未成功初始化，無法生成報告。"
 
-    # 1. 檢索 (Retrieve) - 從主資料表提取更詳細的數據
-    # 這是對向量數據庫相似度搜索的簡化模擬
+    # 1. 檢索 (Retrieve) - 從主資料表提取更詳細的數據 (邏輯不變)
     retrieved_data_str = ""
     for stock_id, row in portfolio_df.iterrows():
         detail = master_df.loc[stock_id]
@@ -45,7 +47,10 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df):
           - 累月營收年增: {detail.get('Revenue_YoY_Accumulated', 'N/A')}%
           - 現金殖利率: {detail.get('Dividend_Yield', 'N/A')}%
         """
-    
+
+    # ▼▼▼ [新增] 產生 HHI 計算過程的字串 ▼▼▼
+    hhi_calculation_str = ' + '.join([f"({w:.2%})²" for w in portfolio_df['Weight']])
+
     # 2. 增強 (Augment) - 建立詳細的提示工程 (Prompt Engineering) 模板
     prompt_template = f"""
     # 角色扮演
@@ -76,11 +81,18 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df):
         - 從組合中挑選2-3個權重最高的標的進行深入分析。
         - 結合 RAG 檢索到的詳細數據（如ROE、Beta、營收成長）和市場資訊，解釋為什麼這些標的適合被納入此策略中。
 
-    3.  **潛在風險與建議**:
-        - 客觀地指出此投資組合可能面臨的潛在風險（例如：產業集中度、利率敏感性、市場波動風險等）。
-        - 提供具體的後續觀察建議，例如「建議投資人持續關注聯準會的利率決策」或「留意主要持股的季度財報表現」。
+    3.  **HHI 指數集中度分析**:  <-- [新增] 要求 AI 撰寫 HHI 分析段落
+        - **這必須是一個獨立的段落。**
+        - **第一部分：定義與公式**。解釋 HHI 指數 (Herfindahl-Hirschman Index) 是衡量投資組合集中度的重要指標，並展示其計算公式：HHI = Σ (個股權重)²。
+        - **第二部分：計算過程**。明確列出本次投資組合的詳細計算過程。格式為：「HHI = {hhi_calculation_str}」。
+        - **第三部分：專業解讀**。根據計算出的最終 HHI 指數 **{hhi_value:.4f}**，給出專業解讀。你需要判斷這個數值代表的是「高度分散」、「適度分散」還是「高度集中」，並解釋這對應到客戶的風險偏好是否合適。
+          - (參考標準：HHI < 0.15 為高度分散，0.15 <= HHI <= 0.25 為適度分散/集中，HHI > 0.25 為高度集中)
 
-    4.  **結語**:
+    4.  **潛在風險與建議**:
+        - 客觀地指出此投資組合可能面臨的潛在風險（例如：產業集中度、利率敏感性、市場波動風險等）。
+        - 提供具體的後續觀察建議。
+
+    5.  **結語**:
         - 用一段話總結這份報告，重申此組合的長期投資價值，並鼓勵客戶保持紀律。
 
     請以 Markdown 格式輸出報告。
