@@ -74,12 +74,11 @@ with st.sidebar:
 if not st.session_state.portfolio.empty:
     portfolio_with_amount = st.session_state.portfolio.copy()
     portfolio_with_amount['Investment_Amount'] = portfolio_with_amount['Weight'] * total_amount
-    if 'Close' in portfolio_with_amount.columns:
-        portfolio_with_amount['Shares_To_Buy (est.)'] = np.floor(portfolio_with_amount['Investment_Amount'] / portfolio_with_amount['Close'])
+    
 
     st.header("📈 您的個人化投資組合")
-    st.dataframe(portfolio_with_amount[['名稱', 'AssetType', 'Industry', 'Weight', 'Investment_Amount', 'Shares_To_Buy (est.)']].style.format({
-        'Weight': '{:.2%}', 'Investment_Amount': '{:,.0f} 元'
+    st.dataframe(portfolio_with_amount[['名稱', 'AssetType', 'Industry', 'Weight', 'Investment_Amount']].style.format({
+    'Weight': '{:.2%}', 'Investment_Amount': '{:,.0f} 元'
     }))
 
     # 視覺化圖表
