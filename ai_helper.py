@@ -1,11 +1,11 @@
-# ai_helper.py (最終完整版)
+# ai_helper.py (TEJ API 最終整合版)
 
 import google.generativeai as genai
 import config
 import pandas as pd
 import streamlit as st
-import requests 
-from datetime import datetime
+from datetime import datetime, timedelta
+import tejapi # 導入 tejapi
 
 # --- AI 模型初始化 ---
 try:
@@ -28,55 +28,63 @@ except Exception as e:
     st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
-# --- Real-time News Function ---
-def get_realtime_market_news(portfolio_df):
+# --- TEJ News Summary Function ---
+def get_tej_news_summary(portfolio_df):
     """
-    使用 MarketAux API 獲取投資組合中相關標的的即時新聞。
+    使用 TEJ API 獲取投資組合中相關個股的近期新聞。
+    TEJ 新聞資料庫: TWN/ANPRC
     """
     try:
-        # 從 Streamlit Secrets 或本地 config 讀取新聞 API 金鑰
-        if 'MARKETAUX_API_TOKEN' in st.secrets:
-            news_api_token = st.secrets['MARKETAUX_API_TOKEN']
+        # --- 步驟 1: 設定 TEJ API 金鑰 ---
+        if 'TEJ_API_KEY' in st.secrets:
+            tej_api_key = st.secrets['TEJ_API_KEY']
         else:
-            # 你也可以在 config.py 中新增 MARKETAUX_API_TOKEN = "YOUR_TOKEN"
-            news_api_token = config.MARKETAUX_API_TOKEN 
+            tej_api_key = config.TEJ_API_KEY
         
-        # 從投資組合中提取股票代碼 (只處理台股)
-        symbols = [f"{sid}.TW" for sid in portfolio_df.index if portfolio_df.loc[sid, 'AssetType'] == '個股']
+        tejapi.ApiConfig.api_key = tej_api_key
+        print("TEJ API Key configured.")
+
+        # --- 步驟 2: 準備查詢參數 ---
+        # 從投資組合中提取股票代碼 (只處理個股)
+        stock_tickers = [sid for sid in portfolio_df.index if portfolio_df.loc[sid, 'AssetType'] == '個股']
         
-        if not symbols:
-            return "本次投資組合未包含個股，無特定標的即時新聞。"
+        if not stock_tickers:
+            return "本次投資組合未包含個股，無特定標的近期資訊。"
 
-        # 建立 API 請求 URL
-        url = (
-            f"https://api.marketaux.com/v1/news/all"
-            f"?symbols={','.join(symbols)}"
-            f"&filter_entities=true&language=zh&api_token={news_api_token}"
-        )
-        
-        response = requests.get(url, timeout=10) # 設定10秒超時
-        response.raise_for_status() # 如果請求失敗 (如 401, 404), 會拋出異常
+        # 設定查詢日期範圍為最近7天
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=7)
+        date_range = {'gte': start_date.strftime('%Y-%m-%d'), 'lte': end_date.strftime('%Y-%m-%d')}
+        print(f"TEJ News: Fetching news for {stock_tickers} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
-        data = response.json()
-        news_items = data.get('data', [])
+        # --- 步驟 3: 呼叫 TEJ API ---
+        # 使用 'TWN/ANPRC' 資料庫抓取新聞
+        news_df = tejapi.get('TWN/ANPRC',
+                             coid=stock_tickers,
+                             mdate=date_range,
+                             opts={'columns': ['coid', 'mdate', 'news_title', 'news_content']},
+                             paginate=True)
 
-        if not news_items:
-            return "未找到與您投資組合相關的即時新聞。"
+        if news_df.empty:
+            return "在最近7天內，未找到與您投資組合相關的財經新聞。"
 
-        # 格式化新聞輸出，只取前三條
+        # --- 步驟 4: 處理與摘要新聞 ---
+        # 移除重複標題的新聞並按日期排序，取最新的5則
+        news_df = news_df.drop_duplicates(subset=['news_title']).sort_values(by='mdate', ascending=False).head(5)
+
         formatted_news = "\n".join(
-            [f"- **{item['title']}**: {item['snippet']}" for item in news_items[:3]]
+            [f"- **({row['mdate'].strftime('%Y-%m-%d')}) {row['news_title']}**: {row['news_content'][:80]}..." 
+             for index, row in news_df.iterrows()]
         )
-        return f"以下是與您投資組合相關的最新市場動態：\n{formatted_news}"
+        return f"以下是與您投資組合相關的最新資訊摘要(來源:TEJ)：\n{formatted_news}"
 
     except Exception as e:
-        print(f"獲取即時新聞失敗: {e}")
-        # 如果 API 失敗，返回一個通用的市場評論，確保報告能繼續生成
-        return "即時新聞API暫時無法連線。根據市場普遍看法，近期市場關注焦點仍在通膨數據與主要央行的利率政策走向。"
+        print(f"獲取 TEJ 新聞失敗: {e}")
+        return "TEJ 新聞資訊服務暫時無法連線。請檢查您的API金鑰或網路連線。"
 
 # --- RAG Report Generator ---
 def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, hhi_value):
-    """模組五：RAG文字報告生成器 (整合即時新聞API)"""
+    """模組五：RAG文字報告生成器 (整合TEJ API)"""
     if llm is None:
         return "AI 模型未成功初始化，無法生成報告。"
 
@@ -93,8 +101,8 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, h
           - Beta: {detail.get('Beta_1Y', 'N/A')}
         """
     
-    # (B) 從外部 API 檢索即時新聞
-    realtime_news_str = get_realtime_market_news(portfolio_df)
+    # (B) 從外部 API 檢索 TEJ 新聞
+    realtime_info_str = get_tej_news_summary(portfolio_df)
     
     # 2. 增強 (Augment)
     current_date = datetime.now().strftime("%Y年%m月%d日")
@@ -114,14 +122,14 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, h
     # RAG 系統檢索到的詳細數據 (來自本地數據庫)
     {retrieved_data_str}
 
-    # RAG 系統檢索到的即時市場資訊 (來自新聞 API)
-    {realtime_news_str}
+    # RAG 系統檢索到的即時資訊 (來自 TEJ API)
+    {realtime_info_str}
 
     # 報告生成指令
     請根據以上所有資訊，為客戶撰寫一份包含以下部分的完整、客觀的投資分析報告：
 
     1.  **總體策略評述**: 總結此組合如何符合客戶的風險偏好。
-    2.  **核心標的分析**: 挑選2-3個權重最高的標的進行深入分析，需結合本地數據與即時新聞。
+    2.  **核心標的分析**: 挑選2-3個權重最高的標的進行深入分析，需結合本地數據與TEJ的近期資訊。
     3.  **HHI 指數集中度分析**: 
         - **必須是獨立段落。**
         - 解釋 HHI 是衡量投資組合集中度的指標，並展示公式：HHI = Σ (個股權重)²。

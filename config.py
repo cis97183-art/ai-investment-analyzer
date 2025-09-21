@@ -8,8 +8,9 @@ OTC_STOCK_FILE = 'OTC without etf.csv'
 # --- API 金鑰設定 ---
 # !! 重要 !!: 請將 'YOUR_API_KEY' 替換成你自己的 Google AI (Gemini) API 金鑰
 # 你可以從 Google AI Studio 免費取得: https://aistudio.google.com/app/apikey
-GEMINI_API_KEY = 'AIzaSyC5t0uo2iJK-dFRZ1JG4bX9eYuVO8Roi0Y'
-MARKETAUX_API_TOKEN = "CN9qWlzQw7OwoYgLv6rcUN7Uf1IaWPUc0dHU2YpW"
+#AIzaSyC5t0uo2iJK-dFRZ1JG4bX9eYuVO8Roi0Y
+GEMINI_API_KEY = 'AIzaSyCueGwrqp3dWkO5hAIb5A3vkEBRCfykJ7A'
+TEJ_API_KEY = "bAthTyIsJ6hGEuwhBJILsCvHihn8VC"
 
 # --- 投資策略參數設定 ---
 # 規則零
