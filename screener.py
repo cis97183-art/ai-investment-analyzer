@@ -1,4 +1,4 @@
-# screener.py (最終強健版 v3)
+# screener.py (最終強健版 v4 - FINAL)
 
 import pandas as pd
 import numpy as np
@@ -44,7 +44,6 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     if '成立年齡' in df_filtered.columns:
         df_filtered['合併年資'].fillna(_to_numeric(df_filtered['成立年齡']), inplace=True)
     
-    # 只有在成功建立 `合併年資` 欄位後才進行篩選
     df_filtered.dropna(subset=['合併年資'], inplace=True)
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)/成立未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
@@ -75,14 +74,17 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     stock_pools = {}
     
     # --- 【最終強健化修正】---
-    # 針對所有可能用到的篩選欄位，進行一次性的存在性檢查
+    # 針對所有可能用到的篩選欄位和排序欄位，進行一次性的存在性檢查
     required_cols = [
+        # 用於篩選 (Conditions) 的欄位
         '一年(σ年)', '一年(β)', '現金股利連配次數', '最新近4Q每股自由金流(元)',
-        '近3年平均ROE(%)', '累月營收年增(%)'
+        '近3年平均ROE(%)', '累月營收年增(%)',
+        # 用於排序 (Sort By) 的欄位
+        '成交價現金殖利率', '最新單季ROE(%)'
     ]
     for col in required_cols:
         if col not in df_stocks.columns:
-            print(f"警告: 股票資料中缺少 '{col}' 欄位，相關篩選功能將受影響。")
+            print(f"警告: 股票資料中缺少 '{col}' 欄位，相關篩選與排序功能將受影響。")
             df_stocks[col] = np.nan
     # --- 修正結束 ---
             
@@ -102,8 +104,9 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         if 'free_cash_flow_min' in conditions: temp_df = temp_df[_to_numeric(temp_df['最新近4Q每股自由金流(元)']) > conditions['free_cash_flow_min']]
         if 'avg_roe_min' in conditions: temp_df = temp_df[_to_numeric(temp_df['近3年平均ROE(%)']) > conditions['avg_roe_min']]
         if 'revenue_growth_min' in conditions: temp_df = temp_df[_to_numeric(temp_df['累月營收年增(%)']) > conditions['revenue_growth_min']]
-
-        temp_df.dropna(subset=rules['sort_by'], inplace=True) # 排序前確保排序欄位沒有空值
+        
+        # 排序前確保排序欄位沒有空值
+        temp_df.dropna(subset=rules['sort_by'], inplace=True) 
         temp_df = temp_df.sort_values(by=rules['sort_by'], ascending=rules['ascending'])
         stock_pools[pool_name] = temp_df.reset_index(drop=True)
         print(f" -> 「{pool_name}」個股池建立完成，共 {len(temp_df)} 筆標的。")
