@@ -7,6 +7,3 @@ venv/
 # 忽略敏感設定檔
 config.py
 
-# 其它你需要忽略的檔案...
-*.xlsx
-*.csv
