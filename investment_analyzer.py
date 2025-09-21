@@ -1,4 +1,4 @@
-# investment_analyzer.py (已修正 AttributeError)
+# investment_analyzer.py (已修正 KeyError)
 
 import pandas as pd
 import numpy as np
@@ -6,7 +6,6 @@ from portfolio_rules import PORTFOLIO_CONSTRUCTION_RULES
 
 def _calculate_hhi(weights: list) -> float:
     """計算 HHI 集中度指數。權重應為 0-1 之間的小數。"""
-    # 確保權重列表不為空
     if not weights:
         return 0.0
     return sum([w**2 for w in weights])
@@ -24,7 +23,6 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
     """
     print(f"\n--- 步驟 3: 建構 {risk_preference} 型 {portfolio_type} 投資組合 ---")
     
-    # 根據 portfolio_type 和 risk_preference 從規則庫中獲取對應的建構規則
     rules = PORTFOLIO_CONSTRUCTION_RULES.get(portfolio_type, {}).get(risk_preference)
     if not rules:
         print(f"錯誤：在 portfolio_rules.py 中找不到對應 '{portfolio_type}' -> '{risk_preference}' 的建構規則。")
@@ -43,7 +41,7 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
             print(f"警告: '{source_pool_name}' 候選池為空，無法建立純個股投資組合。")
             return pd.DataFrame(), candidate_pools
             
-        num_assets = rules['num_assets'][1] # 取規則中定義的標的最大數量
+        num_assets = rules['num_assets'][1]
         max_per_industry = rules['diversification'].get('max_per_industry', num_assets)
         
         selected_stocks = []
@@ -61,26 +59,24 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
         if portfolio_df.empty:
              return pd.DataFrame(), candidate_pools
 
-        # 根據規則設定的因子進行加權
         weight_factor = rules.get('weighting_factor')
         if weight_factor and weight_factor in portfolio_df.columns:
             portfolio_df[weight_factor] = _to_numeric(portfolio_df[weight_factor])
-            factor_values = portfolio_df[weight_factor].fillna(0.0001) # 將 NaN 補上極小值
-            factor_values[factor_values <= 0] = 0.0001 # 將負值或零也換成極小值
+            factor_values = portfolio_df[weight_factor].fillna(0.0001)
+            factor_values[factor_values <= 0] = 0.0001
             total_factor = factor_values.sum()
             
             if total_factor > 0:
                 portfolio_df['權重(%)'] = (factor_values / total_factor * 100).round(2)
-            else: # 如果因子總和仍為零，則採平均權重
+            else:
                  portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
-        else: # 如果沒有設定權重因子或因子不存在，則採平均權重
+        else:
             portfolio_df['權重(%)'] = (100 / len(portfolio_df)).round(2)
 
     # --- 策略二：純ETF組合 ---
     elif portfolio_type == '純ETF':
         selected_etfs_list = []
         
-        # 處理股票型 ETF
         stock_alloc = rules['asset_allocation']['Stocks']
         if stock_alloc > 0:
             stock_pool_names = rules['stock_source_pools']
@@ -88,13 +84,18 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
             
             if not all_stock_etfs.empty and '代碼' in all_stock_etfs.columns:
                 all_stock_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-                # 根據不同風險偏好，給予不同的排序方式
                 sort_key = '年報酬率.含息.' if risk_preference == '積極型' else '一年(σ年)'
                 ascending = False if risk_preference == '積極型' else True
-                candidate_pools['股票ETF'] = all_stock_etfs.sort_values(by=sort_key, ascending=ascending)
+                
+                # 【核心修正】排序前先檢查欄位是否存在
+                if sort_key in all_stock_etfs.columns:
+                    candidate_pools['股票ETF'] = all_stock_etfs.sort_values(by=sort_key, ascending=ascending)
+                else:
+                    print(f"警告: ETF資料中缺少 '{sort_key}' 欄位，無法進行排序。")
+                    candidate_pools['股票ETF'] = all_stock_etfs
+                
                 selected_etfs_list.extend(candidate_pools['股票ETF'].head(2).to_dict('records'))
 
-        # 處理債券型 ETF
         bond_alloc = rules['asset_allocation']['Bonds']
         if bond_alloc > 0:
             bond_pool_names = rules['bond_source_pools']
@@ -102,7 +103,14 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
 
             if not all_bond_etfs.empty and '代碼' in all_bond_etfs.columns:
                 all_bond_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-                candidate_pools['債券ETF'] = all_bond_etfs.sort_values(by='一年(σ年)')
+                
+                # 【核心修正】排序前先檢查欄位是否存在
+                if '一年(σ年)' in all_bond_etfs.columns:
+                    candidate_pools['債券ETF'] = all_bond_etfs.sort_values(by='一年(σ年)')
+                else:
+                    print(f"警告: 債券ETF資料中缺少 '一年(σ年)' 欄位，無法進行排序。")
+                    candidate_pools['債券ETF'] = all_bond_etfs
+
                 selected_etfs_list.extend(candidate_pools['債券ETF'].head(2).to_dict('records'))
 
         if not selected_etfs_list:
@@ -116,17 +124,22 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
         core_alloc = rules['core_satellite_split']['core']
         satellite_alloc = rules['core_satellite_split']['satellite']
         
-        # 核心資產 (ETF)
         core_etf_pools_names = rules['core_etf_pools']
         all_core_etfs = pd.concat([asset_pools.get(p, pd.DataFrame()) for p in core_etf_pools_names], ignore_index=True)
         
         core_selection = pd.DataFrame()
         if not all_core_etfs.empty and '代碼' in all_core_etfs.columns:
             all_core_etfs.drop_duplicates(subset=['代碼'], inplace=True)
-            candidate_pools['核心ETF'] = all_core_etfs.sort_values(by='一年(σ年)')
+            
+            # 【核心修正】排序前先檢查欄位是否存在
+            if '一年(σ年)' in all_core_etfs.columns:
+                candidate_pools['核心ETF'] = all_core_etfs.sort_values(by='一年(σ年)')
+            else:
+                print(f"警告: 核心ETF資料中缺少 '一年(σ年)' 欄位，無法進行排序。")
+                candidate_pools['核心ETF'] = all_core_etfs
+            
             core_selection = candidate_pools['核心ETF'].head(2)
 
-        # 衛星資產 (個股)
         satellite_pool_name = rules['satellite_stock_pool']
         satellite_pool = asset_pools.get(satellite_pool_name, pd.DataFrame())
         candidate_pools['衛星個股'] = satellite_pool
@@ -139,9 +152,8 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
              return pd.DataFrame(), candidate_pools
 
         num_core = len(core_selection)
-        num_satellite_actual = len(satellite_selection) # 使用實際選入的數量
+        num_satellite_actual = len(satellite_selection)
         
-        # 【核心修正】使用內建的 round() 函式，而不是 DataFrame 的 .round() 方法
         if num_core > 0:
             portfolio_df.loc[core_selection.index, '權重(%)'] = round(core_alloc * 100 / num_core, 2)
         if num_satellite_actual > 0:
@@ -151,7 +163,6 @@ def build_portfolio(asset_pools: dict, risk_preference: str, portfolio_type: str
         print(f"錯誤: 不支援的組合類型 '{portfolio_type}'")
         return pd.DataFrame(), {}
 
-    # 最後進行權重總和的微調，確保總和為 100%
     if not portfolio_df.empty:
         portfolio_df['權重(%)'].fillna(0, inplace=True)
         diff = 100 - portfolio_df['權重(%)'].sum()
