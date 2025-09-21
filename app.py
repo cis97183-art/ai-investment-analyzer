@@ -1,4 +1,4 @@
-# app.py (最終完整版)
+# app.py (修正函式名稱版)
 
 import streamlit as st
 import pandas as pd
@@ -10,7 +10,8 @@ import numpy as np
 import config
 from data_loader import load_and_preprocess_data
 from investment_analyzer import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio
-from ai_helper import generate_rag_report, get_chat_response, get_realtime_market_news
+# ▼▼▼ [修改] 從 ai_helper 導入正確的新函式名稱 ▼▼▼
+from ai_helper import generate_rag_report, get_chat_response, get_tej_news_summary
 
 # --- 頁面設定 ---
 st.set_page_config(layout="wide", page_title="AI 個人化投資組合分析")
@@ -82,7 +83,8 @@ with st.sidebar:
                 )
 
                 if not st.session_state.portfolio.empty:
-                    st.session_state.news_summary = get_realtime_market_news(st.session_state.portfolio)
+                    # ▼▼▼ [修改] 呼叫正確的新函式名稱 ▼▼▼
+                    st.session_state.news_summary = get_tej_news_summary(st.session_state.portfolio)
                     
                     st.session_state.report = generate_rag_report(
                         risk_profile, 
@@ -146,10 +148,7 @@ if not st.session_state.portfolio.empty:
     else:
         st.warning("無法生成AI報告。")
 
-    # --- 標的池檢視器 (已恢復) ---
     st.header("🔬 標的池檢視器 (Pool Viewer)")
-    st.markdown("在這裡，您可以檢視投資策略在各個篩選階段的結果，深入了解標的入選的過程。")
-    
     with st.expander("點擊展開或收合標的池檢視器", expanded=False):
         pool_options = list(st.session_state.data_pools.keys())
         selected_pool_name = st.selectbox("請選擇您想檢視的標的池：", options=pool_options)
@@ -168,7 +167,6 @@ if not st.session_state.portfolio.empty:
         else:
             st.warning(f"「{selected_pool_name}」是空的，沒有任何標的。")
 
-    # --- AI 互動問答 (已恢復) ---
     st.header("💬 AI 互動問答")
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
@@ -202,7 +200,7 @@ if not st.session_state.portfolio.empty:
                         st.session_state.portfolio = new_portfolio
                         st.session_state.hhi = new_hhi
                         st.session_state.report = generate_rag_report(inputs['risk'], inputs['type'], new_portfolio, master_df, new_hhi)
-                        st.session_state.news_summary = get_realtime_market_news(new_portfolio)
+                        st.session_state.news_summary = get_tej_news_summary(new_portfolio)
                         st.session_state.messages = []
                         st.success("投資組合已動態調整！頁面將會刷新以顯示最新結果。")
                         st.rerun()
