@@ -1,112 +1,51 @@
-# data_loader.py (最終修正版 v2)
-
 import pandas as pd
 import numpy as np
+from config import LISTED_STOCK_PATH, OTC_STOCK_PATH, ETF_PATH
 
-def clean_stock_data(file_path, file_name):
-    """
-    專門讀取並清理「上市」與「上櫃」股票資料的函式。
-    """
-    print(f"--- 開始處理【{file_name}】---")
-    try:
-        df = pd.read_csv(file_path, encoding='utf-8')
-        print(f"成功讀取檔案: {file_path}")
-    except FileNotFoundError:
-        print(f"錯誤：找不到檔案 {file_path}，請確認檔案路徑是否正確。")
-        return None
-    except Exception as e:
-        print(f"讀取檔案時發生錯誤: {e}")
-        return None
-
-    df.columns = df.columns.str.strip()
-    
-    numeric_cols = [
-        '一年(β)', '市值(億)', '成立年數', '近3年平均ROE(%)', 
-        '近3年加權平均ROE(%)', '最新單季ROE(%)', 'PER', '累月營收年增(%)',
-        '最新季度負債總額佔比(%)', '現金股利連配次數', '成交價現金殖利率',
-        '一年(σ年)', '僑外投資持股(%)', '本國法人持股(%)', '最新近4Q每股自由金流(元)'
-    ]
-
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(',', '', regex=False)
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    print(f"【{file_name}】資料清理完成！")
+def _clean_stock_data(df: pd.DataFrame, asset_type: str) -> pd.DataFrame:
+    """清理上市/上櫃股票資料的輔助函式"""
+    df['資產類別'] = asset_type
+    df.rename(columns={'代號': '代碼'}, inplace=True)
+    df.replace('--', np.nan, inplace=True)
     return df
 
-def clean_etf_data(file_path):
-    """
-    專門讀取並清理 ETF 資料的函式 (現在使用 read_excel)。
-    """
-    print(f"--- 開始處理【ETF 資料】---")
-    try:
-        df = pd.read_excel(file_path)
-        print(f"成功讀取 Excel 檔案: {file_path}")
-    except FileNotFoundError:
-        print(f"錯誤：找不到檔案 {file_path}，請確認檔案路徑是否正確。")
-        return None
-    except Exception as e:
-        print(f"讀取檔案時發生錯誤: {e}")
-        return None
-
-    # *** 修正點：使用精準的 rename，避免產生重複欄位 ***
-    rename_map = {
-        '代碼.y': '代號',
-        '市值.億.': '市值(億)',
-        '一年.β.': '一年(β)',
-        '三年.σ年.': '一年(σ年)',
-        '漲跌...': '漲跌',
-        '折溢價...': '折溢價',
-        '五日均量.張.': '五日均量',
-        '資產規模.億.': '資產規模',
-        '年報酬率.含息.': '年報酬率(含息)',
-        '內扣費用.保管.管理.': '內扣費用'
-    }
-    df.rename(columns=rename_map, inplace=True)
+def _clean_etf_data(df: pd.DataFrame) -> pd.DataFrame:
+    """清理 ETF 資料的輔助函式，並統一規模與代碼欄位"""
+    df['資產類別'] = 'ETF'
     
-    # 刪除不再需要的 `代碼.x` 欄位
-    if '代碼.x' in df.columns:
-        df.drop(columns=['代碼.x'], inplace=True)
+    # 【核心修正】將 '代碼.y' 重新命名為 '代碼'
+    df.rename(columns={'代碼.y': '代碼'}, inplace=True)
+    df.replace('--', np.nan, inplace=True)
     
-    print("欄位名稱清理與標準化完成。")
+    # 建立統一的 '市值(億)' 欄位
+    # 優先使用 '資產規模.億.'，如果該值為空，則使用 '市值.億.'
+    df['市值(億)'] = pd.to_numeric(df['資產規模.億.'], errors='coerce')
+    df['市值(億)'].fillna(pd.to_numeric(df['市值.億.'], errors='coerce'), inplace=True)
     
-    df.replace({'--': np.nan, 'NA': np.nan}, inplace=True)
+    # 刪除舊的、不統一或不再需要的欄位
+    df.drop(columns=['市值.億.', '資產規模.億.', '代碼.x'], inplace=True, errors='ignore')
     
-    percent_cols = ['折溢價', '近四季殖利率', '年報酬率(含息)', '本月月增率', '成交價現金殖利率']
-    for col in percent_cols:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.replace('%', '', regex=False)
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-            if pd.api.types.is_numeric_dtype(df[col]):
-                df[col] = df[col] / 100
-
-    other_numeric_cols = ['市價', '五日均量', '資產規模', '內扣費用', '受益人數', '成立年齡', '一年(β)', '一年(σ年)']
-    for col in other_numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    print("【ETF 資料】資料清理完成！")
     return df
 
-def load_and_prepare_data(listed_path, otc_path, etf_path):
+def load_and_prepare_data(listed_path: str, otc_path: str, etf_path: str) -> pd.DataFrame:
     """
-    主函式：讀取、清理並整合所有資料檔案。
+    載入、清理並合併所有資料來源，回傳一個標準化後的 master DataFrame。
     """
-    df_listed = clean_stock_data(listed_path, "上市股票")
-    df_otc = clean_stock_data(otc_path, "上櫃股票")
-    df_etf = clean_etf_data(etf_path)
-    
-    if df_listed is None or df_otc is None or df_etf is None:
-        print("有部分資料檔案處理失敗，無法繼續。")
-        return None
+    try:
+        # 讀取並清理各個檔案
+        df_etf = _clean_etf_data(pd.read_csv(etf_path))
+        df_listed = _clean_stock_data(pd.read_csv(listed_path), '上市')
+        df_otc = _clean_stock_data(pd.read_csv(otc_path), '上櫃')
 
-    df_listed['資產類別'] = '上市櫃股票'
-    df_otc['資產類別'] = '上市櫃股票'
-    df_etf['資產類別'] = 'ETF'
+        # 合併三個 DataFrame
+        master_df = pd.concat([df_etf, df_listed, df_otc], ignore_index=True, sort=False)
+        
+        print("資料載入與標準化完成！")
+        return master_df
 
-    master_df = pd.concat([df_listed, df_otc, df_etf], ignore_index=True)
-    master_df['代號'] = master_df['代號'].astype(str)
-
-    print("\n--- 所有資料已成功整合至 Master DataFrame ---\n")
-    return master_df
+    except FileNotFoundError as e:
+        print(f"錯誤：找不到檔案 {e.filename}。")
+        raise e
+    except Exception as e:
+        print(f"處理資料時發生錯誤: {e}")
+        raise e
