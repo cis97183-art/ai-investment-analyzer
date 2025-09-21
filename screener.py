@@ -1,15 +1,19 @@
-# screener.py (偵錯模式)
-
 import pandas as pd
 import numpy as np
 from portfolio_rules import UNIVERSAL_EXCLUSION_RULES, STOCK_SCREENING_RULES, ETF_SCREENING_RULES
 
-def _to_numeric(series):
-    """輔助函式：將 Series 轉換為數值型態，錯誤則轉為 NaN"""
-    # 針對可能包含百分比的欄位進行處理
-    if series.dtype == 'object':
-        # 移除 '%' 和 ',' 符號
-        series = series.str.replace('%', '', regex=False).str.replace(',', '', regex=False)
+def _to_numeric(series: pd.Series) -> pd.Series:
+    """
+    輔助函式：將 Series 轉換為數值型態。
+    特別處理可能包含 '%' 或 ',' 的 object (文字) 型態欄位。
+    """
+    if pd.api.types.is_object_dtype(series):
+        # 移除 '%' 和 ',' 符號，再進行轉換
+        return pd.to_numeric(
+            series.astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False),
+            errors='coerce'
+        )
+    # 如果已經是數值型態，直接回傳
     return pd.to_numeric(series, errors='coerce')
 
 def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
@@ -20,9 +24,7 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
 
     # 1. 排除槓桿/反向型ETF
     exclude_types = UNIVERSAL_EXCLUSION_RULES['exclude_etf_types']
-    etf_mask = df_filtered['資產類別'] == 'ETF'
-    type_mask = df_filtered['產業別'].isin(exclude_types)
-    df_filtered = df_filtered[~(etf_mask & type_mask)]
+    df_filtered = df_filtered[~((df_filtered['資產類別'] == 'ETF') & (df_filtered['產業別'].isin(exclude_types)))]
     print(f"排雷 1: 排除槓桿/反向型ETF後，剩下 {len(df_filtered)} 筆")
 
     # 2. 排除規模過小
@@ -34,9 +36,7 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3. 排除數據不足
     min_years = UNIVERSAL_EXCLUSION_RULES['min_listing_years']
-    df_filtered['成立年數'] = _to_numeric(df_filtered['成立年數'])
-    df_filtered['成立年齡'] = _to_numeric(df_filtered['成立年齡'])
-    df_filtered['合併年資'] = df_filtered['成立年數'].fillna(df_filtered['成立年齡'])
+    df_filtered['合併年資'] = _to_numeric(df_filtered['成立年數']).fillna(_to_numeric(df_filtered['成立年齡']))
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
 
@@ -46,15 +46,14 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     if min_fcf_key in UNIVERSAL_EXCLUSION_RULES and fcf_col in df_filtered.columns:
         min_fcf = UNIVERSAL_EXCLUSION_RULES[min_fcf_key]
         df_filtered[fcf_col] = _to_numeric(df_filtered[fcf_col])
-        stock_mask = df_filtered['資產類別'].isin(['上市', '上櫃'])
-        fcf_mask = df_filtered[fcf_col] < min_fcf
-        exclude_mask = stock_mask & fcf_mask
+        exclude_mask = (df_filtered['資產類別'].isin(['上市', '上櫃'])) & (df_filtered[fcf_col] < min_fcf)
         df_filtered = df_filtered[~exclude_mask]
         print(f"排雷 4: 排除近4季每股自由金流為負的個股後，剩下 {len(df_filtered)} 筆")
 
     final_count = len(df_filtered)
     print(f"排雷完成。總共排除了 {initial_count - final_count} 筆標的，最終剩下 {final_count} 筆進入標的池篩選。")
     return df_filtered.drop(columns=['合併年資'], errors='ignore')
+
 
 def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     """對通過排雷的標的進行平行/分類篩選，產出各類標的池"""
@@ -63,68 +62,46 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     df_stocks = df_screened[df_screened['資產類別'].isin(['上市', '上櫃'])].copy()
     df_etfs = df_screened[df_screened['資產類別'] == 'ETF'].copy()
 
-    # --- A: 個股標的池篩選 (平行偵錯模式) ---
+    # --- A: 個股標的池篩選 (平行) ---
     stock_pools = {}
     
-    # 預處理個股資料，確保所有用於比較的欄位都是數值型態
-    numeric_cols = ['一年(σ年)', '一年(β)', '現金股利連配次數', '最新近4Q每股自由金流(元)', '近3年平均ROE(%)', '累月營收年增(%)', '最新單季ROE(%)']
-    for col in numeric_cols:
-        if col in df_stocks.columns:
-            df_stocks[col] = _to_numeric(df_stocks[col])
-    
-    # 預先計算排名以供使用
+    # 預處理：預先計算排名以供使用
+    df_stocks['一年(σ年)'] = _to_numeric(df_stocks['一年(σ年)'])
     df_stocks['std_dev_rank'] = df_stocks['一年(σ年)'].rank(pct=True)
 
     for pool_name, rules in STOCK_SCREENING_RULES.items():
-        print(f"\n===== 開始偵錯個股標的池: {pool_name} =====")
-        temp_df = df_stocks.copy().dropna(subset=numeric_cols) # 先移除包含空值的行，確保比較順利
+        temp_df = df_stocks.copy()
         conditions = rules['conditions']
         
-        print(f"預處理後，用於篩選的原始個股數量: {len(temp_df)}")
-        
-        # 逐條檢查篩選條件
-        if 'std_dev_rank_max' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['std_dev_rank'] <= conditions['std_dev_rank_max']]
-            print(f"  -> 經過 '低波動 (std_dev_rank <= {conditions['std_dev_rank_max']})' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'std_dev_rank_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['std_dev_rank'] >= conditions['std_dev_rank_min']]
-            print(f"  -> 經過 '波動 (std_dev_rank >= {conditions['std_dev_rank_min']})' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'beta_max' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['一年(β)'] <= conditions['beta_max']]
-            print(f"  -> 經過 '低敏感 (beta <= {conditions['beta_max']})' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'beta_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['一年(β)'] >= conditions['beta_min']]
-            print(f"  -> 經過 '高敏感 (beta >= {conditions['beta_min']})' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'dividend_streak_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['現金股利連配次數'] > conditions['dividend_streak_min']]
-            print(f"  -> 經過 '穩定配息 (> {conditions['dividend_streak_min']} 次)' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'free_cash_flow_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['最新近4Q每股自由金流(元)'] > conditions['free_cash_flow_min']]
-            print(f"  -> 經過 '正向現金流 (> {conditions['free_cash_flow_min']})' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'avg_roe_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['近3年平均ROE(%)'] > conditions['avg_roe_min']]
-            print(f"  -> 經過 '持續獲利 (avg_roe > {conditions['avg_roe_min']}%)' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        if 'revenue_growth_min' in conditions:
-            current_count = len(temp_df)
-            temp_df = temp_df[temp_df['累月營收年增(%)'] > conditions['revenue_growth_min']]
-            print(f"  -> 經過 '營收成長 (> {conditions['revenue_growth_min']}%)' 篩選後，從 {current_count} 筆剩下 {len(temp_df)} 筆")
-        
+        # 逐條應用篩選規則
+        for key, value in conditions.items():
+            if 'std_dev_rank_max' == key:
+                temp_df = temp_df[temp_df['std_dev_rank'] <= value]
+            elif 'std_dev_rank_min' == key:
+                temp_df = temp_df[temp_df['std_dev_rank'] >= value]
+            elif 'beta_max' == key:
+                temp_df = temp_df[_to_numeric(temp_df['一年(β)']) <= value]
+            elif 'beta_min' == key:
+                temp_df = temp_df[_to_numeric(temp_df['一年(β)']) >= value]
+            elif 'dividend_streak_min' == key:
+                temp_df = temp_df[_to_numeric(temp_df['現金股利連配次數']) > value]
+            elif 'free_cash_flow_min' == key:
+                temp_df = temp_df[_to_numeric(temp_df['最新近4Q每股自由金流(元)']) > value]
+            elif 'avg_roe_min' == key:
+                temp_df = temp_df[_to_numeric(temp_df['近3年平均ROE(%)']) > value]
+            elif 'revenue_growth_min' == key:
+                temp_df = temp_df[_to_numeric(temp_df['累月營收年增(%)']) > value]
+
+        # 排序
         temp_df = temp_df.sort_values(by=rules['sort_by'], ascending=rules['ascending'])
         stock_pools[pool_name] = temp_df.reset_index(drop=True)
-        print(f"===== {pool_name} 標的池偵錯完成，最終數量: {len(temp_df)} 筆 =====")
+        print(f" -> {pool_name} 標的池建立完成，共 {len(temp_df)} 筆標的。")
 
     # --- B: ETF 標的池篩選 (分類) ---
-    print("\n--- 開始建立 ETF 標的池 ---")
     etf_pools = {}
     for pool_name, rules in ETF_SCREENING_RULES.items():
         keywords_pattern = '|'.join(rules['keywords'])
+        
         if pool_name == 'Thematic/Sector':
             high_div_keywords = '|'.join(ETF_SCREENING_RULES['HighDividend']['keywords'])
             temp_df = df_etfs[df_etfs['名稱'].str.contains(keywords_pattern, na=False) & ~df_etfs['名稱'].str.contains(high_div_keywords, na=False)].copy()
