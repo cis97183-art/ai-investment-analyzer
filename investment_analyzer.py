@@ -72,18 +72,18 @@ def build_portfolio(risk_profile, portfolio_type, stock_pools, etf_pools, forced
         if risk_profile == '保守型':
             pool = stock_pools['conservative']
             count = np.random.randint(*config.CONSERVATIVE_STOCK_COUNT)
-            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count)
+            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count).copy()
             if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'Dividend_Yield')
         elif risk_profile == '穩健型':
             pool = stock_pools['moderate']
             count = np.random.randint(*config.MODERATE_STOCK_COUNT)
-            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count)
+            portfolio_df = pool.groupby('Industry').head(config.MAX_INDUSTRY_CONCENTRATION).head(count).copy()
             if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'ROE_Avg_3Y')
         elif risk_profile == '積極型':
             pool = stock_pools['aggressive']
             count = np.random.randint(*config.AGGRESSIVE_STOCK_COUNT)
             # 積極型可集中產業
-            portfolio_df = pool.head(count)
+            portfolio_df = pool.head(count).copy()
             if not portfolio_df.empty: portfolio_df['Weight'] = apply_factor_weighting(portfolio_df, 'Revenue_YoY_Accumulated')
 
     # --- 純ETF投資組合 ---
