@@ -29,6 +29,9 @@ def load_and_preprocess_data():
         master_df = pd.concat([df_etf, df_stocks], ignore_index=True)
         master_df['StockID'] = master_df['StockID'].astype(str).str.strip()
         master_df = master_df.drop_duplicates(subset='StockID', keep='first')
+
+        # ▼▼▼ 加入這行偵錯程式碼 ▼▼▼
+        print("資料合併後的原始欄位名稱：", master_df.columns.tolist())
         
         # !! 重要 !!: 請根據你實際的 Excel/CSV 欄位名稱微調這裡的 key
         column_mapping = {
