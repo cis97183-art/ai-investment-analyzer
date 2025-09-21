@@ -8,7 +8,7 @@ import re
 # 導入自訂模組
 import config
 from data_loader import load_and_preprocess_data
-from investment_analysis import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio
+from investment_analyzer import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio # <--- 修改完成
 from ai_helper import generate_rag_report, get_chat_response
 
 # --- 頁面設定 ---
