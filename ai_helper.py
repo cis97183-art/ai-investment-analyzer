@@ -3,13 +3,26 @@
 import google.generativeai as genai
 import config
 import pandas as pd
+import streamlit as st # <-- 新增導入 streamlit
 
 try:
-    genai.configure(api_key=config.GEMINI_API_KEY)
+    # 優先從 Streamlit 的 Secrets 讀取 API 金鑰 (用於雲端部署)
+    if 'GEMINI_API_KEY' in st.secrets:
+        api_key = st.secrets['GEMINI_API_KEY']
+        print("Gemini API Key loaded from Streamlit Secrets.")
+    # 如果 Secrets 中沒有，則從本地的 config.py 讀取 (用於本機開發)
+    else:
+        api_key = config.GEMINI_API_KEY
+        print("Gemini API Key loaded from local config.py.")
+
+    genai.configure(api_key=api_key)
     llm = genai.GenerativeModel('gemini-1.5-flash')
     print("Gemini AI 模型初始化成功。")
+
 except Exception as e:
     print(f"AI 模型初始化失敗: {e}")
+    # 在 Streamlit 介面上顯示錯誤，方便除錯
+    st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
 def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df):
