@@ -73,24 +73,23 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         temp_df = df_stocks.copy()
         conditions = rules['conditions']
         
-        # 逐條應用篩選規則
-        for key, value in conditions.items():
-            if 'std_dev_rank_max' == key:
-                temp_df = temp_df[temp_df['std_dev_rank'] <= value]
-            elif 'std_dev_rank_min' == key:
-                temp_df = temp_df[temp_df['std_dev_rank'] >= value]
-            elif 'beta_max' == key:
-                temp_df = temp_df[_to_numeric(temp_df['一年(β)']) <= value]
-            elif 'beta_min' == key:
-                temp_df = temp_df[_to_numeric(temp_df['一年(β)']) >= value]
-            elif 'dividend_streak_min' == key:
-                temp_df = temp_df[_to_numeric(temp_df['現金股利連配次數']) > value]
-            elif 'free_cash_flow_min' == key:
-                temp_df = temp_df[_to_numeric(temp_df['最新近4Q每股自由金流(元)']) > value]
-            elif 'avg_roe_min' == key:
-                temp_df = temp_df[_to_numeric(temp_df['近3年平均ROE(%)']) > value]
-            elif 'revenue_growth_min' == key:
-                temp_df = temp_df[_to_numeric(temp_df['累月營收年增(%)']) > value]
+        # 逐條應用篩選規則，pandas 會自動處理 NaN (比較結果為 False)
+        if 'std_dev_rank_max' in conditions:
+            temp_df = temp_df[temp_df['std_dev_rank'] <= conditions['std_dev_rank_max']]
+        if 'std_dev_rank_min' in conditions:
+            temp_df = temp_df[temp_df['std_dev_rank'] >= conditions['std_dev_rank_min']]
+        if 'beta_max' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['一年(β)']) <= conditions['beta_max']]
+        if 'beta_min' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['一年(β)']) >= conditions['beta_min']]
+        if 'dividend_streak_min' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['現金股利連配次數']) > conditions['dividend_streak_min']]
+        if 'free_cash_flow_min' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['最新近4Q每股自由金流(元)']) > conditions['free_cash_flow_min']]
+        if 'avg_roe_min' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['近3年平均ROE(%)']) > conditions['avg_roe_min']]
+        if 'revenue_growth_min' in conditions:
+            temp_df = temp_df[_to_numeric(temp_df['累月營收年增(%)']) > conditions['revenue_growth_min']]
 
         # 排序
         temp_df = temp_df.sort_values(by=rules['sort_by'], ascending=rules['ascending'])
@@ -113,3 +112,4 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         print(f" -> {pool_name} 標的池建立完成，共 {len(temp_df)} 筆標的。")
         
     return {**stock_pools, **etf_pools}
+
