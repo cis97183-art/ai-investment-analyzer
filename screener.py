@@ -1,4 +1,4 @@
-# screener.py (最終強健版)
+# screener.py (最終強健版 v2)
 
 import pandas as pd
 import numpy as np
@@ -36,14 +36,12 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     # 規則 3: 排除上市/成立年資過短的標的
     min_years = UNIVERSAL_EXCLUSION_RULES['min_listing_years']
     
-    # 強健地合併 '成立年數' 和 '成立年齡' 欄位
     df_filtered['合併年資'] = np.nan
     if '成立年數' in df_filtered.columns:
         df_filtered['合併年資'] = _to_numeric(df_filtered['成立年數'])
     if '成立年齡' in df_filtered.columns:
         df_filtered['合併年資'].fillna(_to_numeric(df_filtered['成立年齡']), inplace=True)
     
-    # 執行篩選，只保留年資足夠的標的
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)/成立未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
 
@@ -53,7 +51,6 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     if min_fcf_key in UNIVERSAL_EXCLUSION_RULES and fcf_col in df_filtered.columns:
         min_fcf = UNIVERSAL_EXCLUSION_RULES[min_fcf_key]
         df_filtered[fcf_col] = _to_numeric(df_filtered[fcf_col])
-        # 此規則只對個股生效
         exclude_mask = (df_filtered['資產類別'].isin(['上市', '上櫃'])) & (df_filtered[fcf_col] < min_fcf)
         df_filtered = df_filtered[~exclude_mask]
         print(f"排雷 4: 排除近4季每股自由金流為負的個股後，剩下 {len(df_filtered)} 筆")
@@ -75,19 +72,24 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     
     # 強健化處理波動率欄位
     if '一年(σ年)' not in df_stocks.columns:
-        print("警告: 股票資料中缺少 '一年(σ年)' 欄位，將無法進行波動率相關篩選。")
+        print("警告: 股票資料中缺少 '一年(σ年)' 欄位，無法進行波動率篩選。")
         df_stocks['一年(σ年)'] = np.nan
     else:
         df_stocks['一年(σ年)'] = _to_numeric(df_stocks['一年(σ年)'])
     
-    # 計算波動率的百分位排名，供後續篩選使用
     df_stocks['std_dev_rank'] = df_stocks['一年(σ年)'].rank(pct=True)
+
+    # --- 【核心修正】強健化處理 Beta 欄位 ---
+    if '一年(β)' not in df_stocks.columns:
+        print("警告: 股票資料中缺少 '一年(β)' 欄位，無法進行 Beta 值篩選。")
+        df_stocks['一年(β)'] = np.nan
+    # --- 修正結束 ---
 
     for pool_name, rules in STOCK_SCREENING_RULES.items():
         temp_df = df_stocks.copy()
         conditions = rules['conditions']
         
-        # 動態應用規則中定義的所有條件
+        # 動態應用規則中定義的所有條件 (現在已能安全處理欄位不存在的情況)
         if 'std_dev_rank_max' in conditions: temp_df = temp_df[temp_df['std_dev_rank'] <= conditions['std_dev_rank_max']]
         if 'std_dev_rank_min' in conditions: temp_df = temp_df[temp_df['std_dev_rank'] >= conditions['std_dev_rank_min']]
         if 'beta_max' in conditions: temp_df = temp_df[_to_numeric(temp_df['一年(β)']) <= conditions['beta_max']]
@@ -106,14 +108,12 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     for pool_name, rules in ETF_SCREENING_RULES.items():
         keywords_pattern = '|'.join(rules['keywords'])
         
-        # 特殊規則：主題型ETF要排除掉高股息ETF
         if pool_name == '主題/產業型':
             high_div_keywords = '|'.join(ETF_SCREENING_RULES['高股息型']['keywords'])
             temp_df = df_etfs[df_etfs['名稱'].str.contains(keywords_pattern, na=False) & ~df_etfs['名稱'].str.contains(high_div_keywords, na=False)].copy()
         else:
              temp_df = df_etfs[df_etfs['名稱'].str.contains(keywords_pattern, na=False)].copy()
         
-        # 根據波動率排序 (如果欄位存在)
         if '一年(σ年)' in temp_df.columns:
              temp_df['一年(σ年)'] = _to_numeric(temp_df['一年(σ年)'])
              etf_pools[pool_name] = temp_df.sort_values(by='一年(σ年)').reset_index(drop=True)
@@ -122,5 +122,5 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
              
         print(f" -> 「{pool_name}」ETF池建立完成，共 {len(temp_df)} 筆標的。")
         
-    # 合併個股與ETF標的池並回傳
     return {**stock_pools, **etf_pools}
+
