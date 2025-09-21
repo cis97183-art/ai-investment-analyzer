@@ -1,17 +1,19 @@
-# ai_helper.py (2025-09-21 RAG 升級版)
+# ai_helper.py (最終完整版)
 
 import google.generativeai as genai
 import config
 import pandas as pd
 import streamlit as st
-import requests # <-- [新增] 導入 requests 套件
-from datetime import datetime # <-- [新增] 導入 datetime 套件
+import requests 
+from datetime import datetime
 
-# --- AI 模型初始化 (保持不變，使用我們之前修正過的版本) ---
+# --- AI 模型初始化 ---
 try:
+    # 優先從 Streamlit 的 Secrets 讀取 API 金鑰 (用於雲端部署)
     if 'GEMINI_API_KEY' in st.secrets:
         api_key = st.secrets['GEMINI_API_KEY']
         print("Gemini API Key loaded from Streamlit Secrets.")
+    # 如果 Secrets 中沒有，則從本地的 config.py 讀取 (用於本機開發)
     else:
         api_key = config.GEMINI_API_KEY
         print("Gemini API Key loaded from local config.py.")
@@ -19,12 +21,14 @@ try:
     genai.configure(api_key=api_key)
     llm = genai.GenerativeModel('gemini-1.5-flash')
     print("Gemini AI 模型初始化成功。")
+
 except Exception as e:
     print(f"AI 模型初始化失敗: {e}")
+    # 在 Streamlit 介面上顯示錯誤，方便除錯
     st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
-# ▼▼▼ [新增] 獲取即時財經新聞的函式 ▼▼▼
+# --- Real-time News Function ---
 def get_realtime_market_news(portfolio_df):
     """
     使用 MarketAux API 獲取投資組合中相關標的的即時新聞。
@@ -69,19 +73,17 @@ def get_realtime_market_news(portfolio_df):
         print(f"獲取即時新聞失敗: {e}")
         # 如果 API 失敗，返回一個通用的市場評論，確保報告能繼續生成
         return "即時新聞API暫時無法連線。根據市場普遍看法，近期市場關注焦點仍在通膨數據與主要央行的利率政策走向。"
-# ▲▲▲ 新增函式結束 ▲▲▲
 
-
+# --- RAG Report Generator ---
 def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, hhi_value):
     """模組五：RAG文字報告生成器 (整合即時新聞API)"""
     if llm is None:
         return "AI 模型未成功初始化，無法生成報告。"
 
-    # --- 1. 檢索 (Retrieve) ---
-    # (A) 從本地數據庫檢索詳細數據 (邏輯不變)
+    # 1. 檢索 (Retrieve)
+    # (A) 從本地數據庫檢索詳細數據
     retrieved_data_str = ""
     for stock_id, row in portfolio_df.iterrows():
-        # ... (這段邏輯保持不變) ...
         detail = master_df.loc[stock_id]
         retrieved_data_str += f"""
         - **{detail['名稱']} ({stock_id})**:
@@ -91,15 +93,13 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, h
           - Beta: {detail.get('Beta_1Y', 'N/A')}
         """
     
-    # (B) [升級] 從外部 API 檢索即時新聞
+    # (B) 從外部 API 檢索即時新聞
     realtime_news_str = get_realtime_market_news(portfolio_df)
     
-    # --- 2. 增強 (Augment) ---
-    # [升級] 獲取今天的日期
+    # 2. 增強 (Augment)
     current_date = datetime.now().strftime("%Y年%m月%d日")
     hhi_calculation_str = ' + '.join([f"({w:.2%})²" for w in portfolio_df['Weight']])
 
-    # [升級] 更新 Prompt 模板
     prompt_template = f"""
     # 角色扮演
     你是一位專業、資深的投資組合分析師。
@@ -138,3 +138,44 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, h
         return response.text
     except Exception as e:
         return f"生成 AI 報告時發生錯誤: {e}"
+
+# --- Chatbot Responder ---
+def get_chat_response(chat_history, user_query, portfolio_df, master_df):
+    """模組六：互動式AI聊天機器人"""
+    if llm is None:
+        return "AI 模型未成功初始化，無法回應。"
+    
+    context = f"""
+    This is the current chat history:
+    {chat_history}
+
+    This is the current portfolio on screen:
+    {portfolio_df[['名稱', 'Weight']].to_markdown()}
+
+    This is the user's latest question:
+    "{user_query}"
+    """
+    
+    prompt = f"""
+    # Role
+    You are a friendly and professional AI investment advisor.
+
+    # Task
+    Based on the provided chat history and the current portfolio information, concisely answer the user's question in Traditional Chinese.
+
+    # Guiding Principles
+    - If the question is about a specific security in the portfolio, use the portfolio data to answer.
+    - If it's a general financial question (e.g., "What is Beta?"), provide a clear explanation.
+    - Keep the answer concise and to the point.
+
+    # Context
+    {context}
+
+    Please generate your response:
+    """
+    
+    try:
+        response = llm.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"生成 AI 回應時發生錯誤: {e}"
