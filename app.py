@@ -7,7 +7,7 @@ import data_loader
 import screener
 import investment_analyzer
 import ai_helper
-from config import GOOGLE_API_KEY # 從 config 讀取 API Key
+# 移除了 "from config import GOOGLE_API_KEY"
 
 # --- 1. 頁面設定 (Page Configuration) ---
 st.set_page_config(
@@ -143,10 +143,12 @@ else:
         st.markdown("---")
         st.subheader("🤖 AI 智慧助理")
         
-        if not GOOGLE_API_KEY:
-            st.warning("尚未設定 Google API Key，AI 助理功能無法使用。請在 config.py 中設定。")
+        # 【修正點】改用 st.secrets 檢查和讀取 API Key
+        if "GOOGLE_API_KEY" not in st.secrets or not st.secrets["GOOGLE_API_KEY"]:
+            st.warning("尚未在 secrets.toml 中設定 Google API Key，AI 助理功能無法使用。")
         else:
-            ai_helper.initialize_gemini(GOOGLE_API_KEY)
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            ai_helper.initialize_gemini(api_key)
             
             # 顯示歷史對話
             for message in st.session_state.messages:
