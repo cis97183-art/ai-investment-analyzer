@@ -54,6 +54,26 @@ def load_and_preprocess_data():
     }
         master_df = master_df.rename(columns=column_mapping)
         
+        # ▼▼▼ 在這裡貼上新的程式碼 ▼▼▼
+        # --- 新增：合併由 rename 產生的重複欄位的程式碼 ---
+        cols_to_check = ['MarketCap_Billions', 'Beta_1Y', 'Age_Years', 'StdDev_1Y', 'Close']
+
+        for col in cols_to_check:
+        # 如果某個欄位名稱在 DataFrame 中實際代表了多個欄位
+            if isinstance(master_df.get(col), pd.DataFrame):
+                print(f"偵測到重複欄位 '{col}'，進行智慧合併...")
+                # 我們使用 bfill + ffill 策略來合併
+                # 這會優先使用第一個欄位的值，如果是空的，就用第二、三個...欄位的值來填補
+                merged_series = master_df[col].bfill(axis=1).iloc[:, 0]
+
+        # 刪除舊的、重複的欄位群
+        master_df = master_df.drop(columns=col)
+
+        # 將合併後的新欄位加回來
+        master_df[col] = merged_series
+# --- 合併程式碼結束 ---
+# ▲▲▲ 貼上到這裡為止 ▲▲▲
+
         numeric_cols = [
             'MarketCap_Billions', 'StdDev_1Y', 'Beta_1Y', 'Dividend_Consecutive_Years',
             'FCFPS_Last_4Q', 'Dividend_Yield', 'ROE_Avg_3Y', 'Revenue_YoY_Accumulated',
