@@ -1,4 +1,4 @@
-# screener.py (最終強健版 v2)
+# screener.py (最終強健版 v3)
 
 import pandas as pd
 import numpy as np
@@ -23,14 +23,16 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
 
     # 規則 1: 排除槓桿/反向型ETF
     exclude_types = UNIVERSAL_EXCLUSION_RULES['exclude_etf_types']
-    df_filtered = df_filtered[~((df_filtered['資產類別'] == 'ETF') & (df_filtered['產業別'].isin(exclude_types)))]
+    if '產業別' in df_filtered.columns:
+        df_filtered = df_filtered[~((df_filtered['資產類別'] == 'ETF') & (df_filtered['產業別'].isin(exclude_types)))]
     print(f"排雷 1: 排除槓桿/反向型ETF後，剩下 {len(df_filtered)} 筆")
 
     # 規則 2: 排除市值過小的標的
     min_cap = UNIVERSAL_EXCLUSION_RULES['min_market_cap_billion']
-    df_filtered['市值(億)'] = _to_numeric(df_filtered['市值(億)'])
-    df_filtered.dropna(subset=['市值(億)'], inplace=True)
-    df_filtered = df_filtered[df_filtered['市值(億)'] >= min_cap]
+    if '市值(億)' in df_filtered.columns:
+        df_filtered['市值(億)'] = _to_numeric(df_filtered['市值(億)'])
+        df_filtered.dropna(subset=['市值(億)'], inplace=True)
+        df_filtered = df_filtered[df_filtered['市值(億)'] >= min_cap]
     print(f"排雷 2: 排除市值小於 {min_cap} 億的標的後，剩下 {len(df_filtered)} 筆")
 
     # 規則 3: 排除上市/成立年資過短的標的
@@ -42,6 +44,8 @@ def apply_universal_exclusion_rules(df: pd.DataFrame) -> pd.DataFrame:
     if '成立年齡' in df_filtered.columns:
         df_filtered['合併年資'].fillna(_to_numeric(df_filtered['成立年齡']), inplace=True)
     
+    # 只有在成功建立 `合併年資` 欄位後才進行篩選
+    df_filtered.dropna(subset=['合併年資'], inplace=True)
     df_filtered = df_filtered[df_filtered['合併年資'] >= min_years]
     print(f"排雷 3: 排除上市(櫃)/成立未滿 {min_years} 年的標的後，剩下 {len(df_filtered)} 筆")
 
@@ -70,26 +74,26 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
     # --- A: 個股標的池篩選 (平行篩選) ---
     stock_pools = {}
     
-    # 強健化處理波動率欄位
-    if '一年(σ年)' not in df_stocks.columns:
-        print("警告: 股票資料中缺少 '一年(σ年)' 欄位，無法進行波動率篩選。")
-        df_stocks['一年(σ年)'] = np.nan
-    else:
-        df_stocks['一年(σ年)'] = _to_numeric(df_stocks['一年(σ年)'])
-    
-    df_stocks['std_dev_rank'] = df_stocks['一年(σ年)'].rank(pct=True)
-
-    # --- 【核心修正】強健化處理 Beta 欄位 ---
-    if '一年(β)' not in df_stocks.columns:
-        print("警告: 股票資料中缺少 '一年(β)' 欄位，無法進行 Beta 值篩選。")
-        df_stocks['一年(β)'] = np.nan
+    # --- 【最終強健化修正】---
+    # 針對所有可能用到的篩選欄位，進行一次性的存在性檢查
+    required_cols = [
+        '一年(σ年)', '一年(β)', '現金股利連配次數', '最新近4Q每股自由金流(元)',
+        '近3年平均ROE(%)', '累月營收年增(%)'
+    ]
+    for col in required_cols:
+        if col not in df_stocks.columns:
+            print(f"警告: 股票資料中缺少 '{col}' 欄位，相關篩選功能將受影響。")
+            df_stocks[col] = np.nan
     # --- 修正結束 ---
+            
+    df_stocks['一年(σ年)'] = _to_numeric(df_stocks['一年(σ年)'])
+    df_stocks['std_dev_rank'] = df_stocks['一年(σ年)'].rank(pct=True)
 
     for pool_name, rules in STOCK_SCREENING_RULES.items():
         temp_df = df_stocks.copy()
         conditions = rules['conditions']
         
-        # 動態應用規則中定義的所有條件 (現在已能安全處理欄位不存在的情況)
+        # 動態應用規則中定義的所有條件 (現在已能安全處理所有欄位不存在的情況)
         if 'std_dev_rank_max' in conditions: temp_df = temp_df[temp_df['std_dev_rank'] <= conditions['std_dev_rank_max']]
         if 'std_dev_rank_min' in conditions: temp_df = temp_df[temp_df['std_dev_rank'] >= conditions['std_dev_rank_min']]
         if 'beta_max' in conditions: temp_df = temp_df[_to_numeric(temp_df['一年(β)']) <= conditions['beta_max']]
@@ -99,6 +103,7 @@ def generate_asset_pools(master_df: pd.DataFrame) -> dict:
         if 'avg_roe_min' in conditions: temp_df = temp_df[_to_numeric(temp_df['近3年平均ROE(%)']) > conditions['avg_roe_min']]
         if 'revenue_growth_min' in conditions: temp_df = temp_df[_to_numeric(temp_df['累月營收年增(%)']) > conditions['revenue_growth_min']]
 
+        temp_df.dropna(subset=rules['sort_by'], inplace=True) # 排序前確保排序欄位沒有空值
         temp_df = temp_df.sort_values(by=rules['sort_by'], ascending=rules['ascending'])
         stock_pools[pool_name] = temp_df.reset_index(drop=True)
         print(f" -> 「{pool_name}」個股池建立完成，共 {len(temp_df)} 筆標的。")
