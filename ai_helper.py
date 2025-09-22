@@ -29,22 +29,20 @@ except Exception as e:
     st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
-# ▼▼▼ [重大修改] 全新的純 yfinance 新聞摘要函式 ▼▼▼
+# ▼▼▼ [重大修改] 增強 get_yfinance_news_summary 函式的穩定性 ▼▼▼
 def get_yfinance_news_summary(portfolio_df, master_df):
     """
     完全使用 yfinance 獲取新聞摘要。
-    優先獲取個股新聞，若不足則降級為獲取其產業代表性ETF的新聞。
+    增加了對新聞項目格式的檢查，使其更穩定。
     """
-    # [可擴充] 產業名稱到代表性ETF的對照表
-    # 你可以根據需求自行增加更多產業與ETF的對應
     INDUSTRY_ETF_MAP = {
-        "半導體業": "00891.TW", # 中信關鍵半導體
-        "金融保險業": "0055.TW", # 元大MSCI金融
-        "電腦及週邊設備業": "00899.TW", # FT臺灣Smart
-        "通信網路業": "00881.TW", # 國泰台灣5G+
-        "航運業": "0056.TW" # 元大高股息 (常包含航運股)
+        "半導體業": "00891.TW",
+        "金融保險業": "0055.TW",
+        "電腦及週邊設備業": "00899.TW",
+        "通信網路業": "00881.TW",
+        "航運業": "0056.TW"
     }
-    NEWS_THRESHOLD = 2 # 設定新聞數量的門檻值 (少於2條則觸發降級)
+    NEWS_THRESHOLD = 2
     all_news_extracts = []
     
     stock_tickers = {sid: master_df.loc[sid, '名稱'] 
@@ -62,15 +60,19 @@ def get_yfinance_news_summary(portfolio_df, master_df):
             ticker_obj = yf.Ticker(f"{ticker_id}.TW")
             news = ticker_obj.news
             
-            if len(news) >= NEWS_THRESHOLD:
-                print(f"  -> Found {len(news)} articles. Using stock-specific news.")
-                formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news[:2]]
+            # [修改] 先過濾出確定有 'title' 欄位的新聞
+            news_with_titles = [item for item in news if 'title' in item]
+            
+            if len(news_with_titles) >= NEWS_THRESHOLD:
+                print(f"  -> Found {len(news_with_titles)} valid articles. Using stock-specific news.")
+                # 使用過濾後的 news_with_titles 來格式化
+                formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news_with_titles[:2]]
                 all_news_extracts.extend(formatted_news)
                 news_found_for_stock = True
 
             # --- 備用策略: 降級為抓取產業ETF新聞 ---
             if not news_found_for_stock:
-                print(f"  -> Found only {len(news)} articles. Falling back to industry ETF news.")
+                print(f"  -> Found only {len(news_with_titles)} valid articles. Falling back to industry ETF news.")
                 industry = master_df.loc[ticker_id, 'Industry']
                 
                 if pd.notna(industry) and industry in INDUSTRY_ETF_MAP:
@@ -78,14 +80,17 @@ def get_yfinance_news_summary(portfolio_df, master_df):
                     print(f"  -> Industry '{industry}' maps to ETF {etf_ticker}. Fetching news...")
                     etf_obj = yf.Ticker(etf_ticker)
                     etf_news = etf_obj.news
-                    if etf_news:
-                        formatted_news = [f"- (產業新聞) **{industry}**: {item['title']}" for item in etf_news[:2]]
+                    
+                    # [修改] 同樣先過濾出確定有 'title' 欄位的新聞
+                    etf_news_with_titles = [item for item in etf_news if 'title' in item]
+
+                    if etf_news_with_titles:
+                        formatted_news = [f"- (產業新聞) **{industry}**: {item['title']}" for item in etf_news_with_titles[:2]]
                         all_news_extracts.extend(formatted_news)
                 else:
                     print(f"  -> No representative ETF found for industry: '{industry}'.")
-                    # 即使降級失敗，如果原本有找到1條新聞，還是把它加進去
-                    if news:
-                        formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news[:1]]
+                    if news_with_titles:
+                        formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news_with_titles[:1]]
                         all_news_extracts.extend(formatted_news)
 
         except Exception as e:
@@ -97,7 +102,7 @@ def get_yfinance_news_summary(portfolio_df, master_df):
     
     final_news_string = "\n".join(sorted(list(set(all_news_extracts))))
     return f"以下是與您投資組合相關的最新市場動態摘要：\n{final_news_string}"
-# ▲▲▲ 新函式結束 ▲▲▲
+# ▲▲▲ 函式修改結束 ▲▲▲
 
 # --- RAG Report Generator (同步修改) ---
 def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, hhi_value):
