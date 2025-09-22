@@ -11,7 +11,7 @@ import config
 from data_loader import load_and_preprocess_data
 from investment_analyzer import run_rule_zero, create_stock_pools, create_etf_pools, build_portfolio
 # ▼▼▼ [修改] 從 ai_helper 導入正確的新函式名稱 ▼▼▼
-from ai_helper import generate_rag_report, get_chat_response, get_tej_news_summary
+from ai_helper import generate_rag_report, get_chat_response, get_yfinance_news_summary
 
 # --- 頁面設定 ---
 st.set_page_config(layout="wide", page_title="AI 個人化投資組合分析")
@@ -84,7 +84,7 @@ with st.sidebar:
 
                 if not st.session_state.portfolio.empty:
                     # ▼▼▼ [修改] 呼叫正確的新函式名稱 ▼▼▼
-                    st.session_state.news_summary = get_tej_news_summary(st.session_state.portfolio)
+                    st.session_state.news_summary = get_yfinance_news_summary(st.session_state.portfolio, master_df)
                     
                     st.session_state.report = generate_rag_report(
                         risk_profile, 

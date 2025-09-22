@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
 import tejapi # 導入 tejapi
+import yfinance as yf # 導入 yfinance
 
 # --- AI 模型初始化 ---
 try:
@@ -28,68 +29,80 @@ except Exception as e:
     st.error(f"AI 模型初始化失敗，請檢查 API 金鑰是否已正確設定在 Streamlit Secrets 中。錯誤訊息: {e}")
     llm = None
 
-# --- TEJ News Summary Function ---
-def get_tej_news_summary(portfolio_df):
+# ▼▼▼ [重大修改] 全新的純 yfinance 新聞摘要函式 ▼▼▼
+def get_yfinance_news_summary(portfolio_df, master_df):
     """
-    使用 TEJ API 獲取投資組合中相關個股的近期新聞。
-    TEJ 新聞資料庫: TWN/ANPRC
+    完全使用 yfinance 獲取新聞摘要。
+    優先獲取個股新聞，若不足則降級為獲取其產業代表性ETF的新聞。
     """
-    try:
-        # --- 步驟 1: 設定 TEJ API 金鑰 ---
-        if 'TEJ_API_KEY' in st.secrets:
-            tej_api_key = st.secrets['TEJ_API_KEY']
-        else:
-            tej_api_key = config.TEJ_API_KEY
-        
-        tejapi.ApiConfig.api_key = tej_api_key
-        print("TEJ API Key configured.")
+    # [可擴充] 產業名稱到代表性ETF的對照表
+    # 你可以根據需求自行增加更多產業與ETF的對應
+    INDUSTRY_ETF_MAP = {
+        "半導體業": "00891.TW", # 中信關鍵半導體
+        "金融保險業": "0055.TW", # 元大MSCI金融
+        "電腦及週邊設備業": "00899.TW", # FT臺灣Smart
+        "通信網路業": "00881.TW", # 國泰台灣5G+
+        "航運業": "0056.TW" # 元大高股息 (常包含航運股)
+    }
+    NEWS_THRESHOLD = 2 # 設定新聞數量的門檻值 (少於2條則觸發降級)
+    all_news_extracts = []
+    
+    stock_tickers = {sid: master_df.loc[sid, '名稱'] 
+                     for sid in portfolio_df.index 
+                     if portfolio_df.loc[sid, 'AssetType'] == '個股'}
 
-        # --- 步驟 2: 準備查詢參數 ---
-        # 從投資組合中提取股票代碼 (只處理個股)
-        stock_tickers = [sid for sid in portfolio_df.index if portfolio_df.loc[sid, 'AssetType'] == '個股']
-        
-        if not stock_tickers:
-            return "本次投資組合未包含個股，無特定標的近期資訊。"
+    if not stock_tickers:
+        return "本次投資組合未包含個股，無特定標的近期資訊。"
 
-        # 設定查詢日期範圍為最近7天
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=7)
-        date_range = {'gte': start_date.strftime('%Y-%m-%d'), 'lte': end_date.strftime('%Y-%m-%d')}
-        print(f"TEJ News: Fetching news for {stock_tickers} from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    for ticker_id, stock_name in stock_tickers.items():
+        news_found_for_stock = False
+        try:
+            # --- 優先策略: yfinance 抓取個股新聞 ---
+            print(f"Fetching yfinance news for {ticker_id}.TW ({stock_name})...")
+            ticker_obj = yf.Ticker(f"{ticker_id}.TW")
+            news = ticker_obj.news
+            
+            if len(news) >= NEWS_THRESHOLD:
+                print(f"  -> Found {len(news)} articles. Using stock-specific news.")
+                formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news[:2]]
+                all_news_extracts.extend(formatted_news)
+                news_found_for_stock = True
 
-        # --- 步驟 3: 呼叫 TEJ API ---
-        # 使用 'TWN/ANPRC' 資料庫抓取新聞
-        news_df = tejapi.get('TWN/ANPRC',
-                             coid=stock_tickers,
-                             mdate=date_range,
-                             opts={'columns': ['coid', 'mdate', 'news_title', 'news_content']},
-                             paginate=True)
+            # --- 備用策略: 降級為抓取產業ETF新聞 ---
+            if not news_found_for_stock:
+                print(f"  -> Found only {len(news)} articles. Falling back to industry ETF news.")
+                industry = master_df.loc[ticker_id, 'Industry']
+                
+                if pd.notna(industry) and industry in INDUSTRY_ETF_MAP:
+                    etf_ticker = INDUSTRY_ETF_MAP[industry]
+                    print(f"  -> Industry '{industry}' maps to ETF {etf_ticker}. Fetching news...")
+                    etf_obj = yf.Ticker(etf_ticker)
+                    etf_news = etf_obj.news
+                    if etf_news:
+                        formatted_news = [f"- (產業新聞) **{industry}**: {item['title']}" for item in etf_news[:2]]
+                        all_news_extracts.extend(formatted_news)
+                else:
+                    print(f"  -> No representative ETF found for industry: '{industry}'.")
+                    # 即使降級失敗，如果原本有找到1條新聞，還是把它加進去
+                    if news:
+                        formatted_news = [f"- (個股新聞) **{stock_name}**: {item['title']}" for item in news[:1]]
+                        all_news_extracts.extend(formatted_news)
 
-        if news_df.empty:
-            return "在最近7天內，未找到與您投資組合相關的財經新聞。"
+        except Exception as e:
+            print(f"Error fetching yfinance news for {ticker_id}: {e}")
+            continue
 
-        # --- 步驟 4: 處理與摘要新聞 ---
-        # 移除重複標題的新聞並按日期排序，取最新的5則
-        news_df = news_df.drop_duplicates(subset=['news_title']).sort_values(by='mdate', ascending=False).head(5)
+    if not all_news_extracts:
+        return "未能獲取與您投資組合相關的近期市場新聞。"
+    
+    final_news_string = "\n".join(sorted(list(set(all_news_extracts))))
+    return f"以下是與您投資組合相關的最新市場動態摘要：\n{final_news_string}"
+# ▲▲▲ 新函式結束 ▲▲▲
 
-        formatted_news = "\n".join(
-            [f"- **({row['mdate'].strftime('%Y-%m-%d')}) {row['news_title']}**: {row['news_content'][:80]}..." 
-             for index, row in news_df.iterrows()]
-        )
-        return f"以下是與您投資組合相關的最新資訊摘要(來源:TEJ)：\n{formatted_news}"
-
-    except Exception as e:
-        print(f"獲取 TEJ 新聞失敗: {e}")
-        return "TEJ 新聞資訊服務暫時無法連線。請檢查您的API金鑰或網路連線。"
-
-# --- RAG Report Generator ---
+# --- RAG Report Generator (同步修改) ---
 def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, hhi_value):
-    """模組五：RAG文字報告生成器 (整合TEJ API)"""
-    if llm is None:
-        return "AI 模型未成功初始化，無法生成報告。"
-
-    # 1. 檢索 (Retrieve)
-    # (A) 從本地數據庫檢索詳細數據
+    if llm is None: return "AI 模型未成功初始化，無法生成報告。"
+    
     retrieved_data_str = ""
     for stock_id, row in portfolio_df.iterrows():
         detail = master_df.loc[stock_id]
@@ -101,28 +114,19 @@ def generate_rag_report(risk_profile, portfolio_type, portfolio_df, master_df, h
           - Beta: {detail.get('Beta_1Y', 'N/A')}
         """
     
-    # (B) 從外部 API 檢索 TEJ 新聞
-    realtime_info_str = get_tej_news_summary(portfolio_df)
+    # [修改] 從 yfinance 智慧策略中檢索新聞
+    realtime_info_str = get_yfinance_news_summary(portfolio_df, master_df)
     
-    # 2. 增強 (Augment)
     current_date = datetime.now().strftime("%Y年%m月%d日")
     hhi_calculation_str = ' + '.join([f"({w:.2%})²" for w in portfolio_df['Weight']])
 
     prompt_template = f"""
-    # 角色扮演
-    你是一位專業、資深的投資組合分析師。
-
-    # 客戶背景與報告資訊
-    - **客戶類型**: {risk_profile} 投資人
-    - **報告日期**: {current_date}
-
-    # 系統生成的投資組合建議
-    {portfolio_df[['名稱', 'Weight']].to_markdown()}
-
+    # 角色扮演...
+    # 客戶背景與報告資訊...
+    # 系統生成的投資組合建議...
     # RAG 系統檢索到的詳細數據 (來自本地數據庫)
     {retrieved_data_str}
-
-    # RAG 系統檢索到的即時資訊 (來自 TEJ API)
+    # RAG 系統檢索到的即時資訊 (來自 yfinance)
     {realtime_info_str}
 
     # 報告生成指令
